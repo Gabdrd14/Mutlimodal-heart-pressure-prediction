@@ -96,28 +96,22 @@ class ArtifactCleaner:
         return clean
 
 
-    # ---- Pacemaker spike removal ----
 
-    def remove_pacing_spikes(self, ecg, threshold=6):
-        z = np.abs((ecg - np.mean(ecg)) / np.std(ecg))
-        spike_idx = np.where(z > threshold)[0]
+    def adaptive_filter(self , sig, noise, mu=0.01, order=4):
+        
+        """
+        Docstring pour adaptive_filter
+        
+        :param self: Description
+        :param sig: signal
+        :param noise: bruit
+        :param mu: 
+        :param order: 
+        """ 
 
-        if len(spike_idx) < 5:
-            return ecg
-
-        clean = ecg.copy()
-        good = np.ones(len(ecg), dtype=bool)
-        good[spike_idx] = False
-
-        f = interp1d(
-            np.where(good)[0],
-            clean[good],
-            kind="linear",
-            fill_value="extrapolate"
-        )
-
-        clean[spike_idx] = f(spike_idx)
+        clean, _, _ = lfilter([mu] * order, 1, sig, zi=noise)
         return clean
+
 
     # ---- Outlier smoothing ----
 
@@ -147,25 +141,7 @@ class ArtifactCleaner:
         return clean
 
 
-    def adaptive_filter(self , sig, noise, mu=0.01, order=4):
-         
-        """
-        Docstring pour adaptive_filter
-        
-        :param self: Description
-        :param sig: signal
-        :param noise: bruit
-        :param mu: 
-        :param order: 
-        """
-
-        filtered_signal, _, _ = lfilter([mu] * order, 1, sig, zi=noise)
-        return filtered_signal
-
-
-
-
-    # ---- Motion artifact SCG ----
+    # ---- Motion artifact SCG / ECG (pacemaker) ----
 
     def suppress_motion(self, scg):
 
@@ -205,11 +181,11 @@ class CleanPreprocessingPipeline:
         # ========== ECG cleaning ==========
         ecg_clean = self.cleaner.highpass(ecg_raw)
         ecg_clean = self.cleaner.bandpass(ecg_raw, 1 , 40)
-
-        ecg_clean = self.cleaner.remove_pacing_spikes(ecg_clean)
+        ecg_clean = self.cleaner.suppress_motion(scg_clean)
         ecg_clean = self.cleaner.hampel_filter(ecg_clean)
 
         # ========== SCG cleaning ==========
+
         scg_clean = self.cleaner.bandpass(scg_raw, 1, 40)
         scg_clean = self.cleaner.suppress_motion(scg_clean)
         scg_clean = self.cleaner.hampel_filter(scg_clean)
@@ -218,11 +194,12 @@ class CleanPreprocessingPipeline:
         ecg_clean = (ecg_clean - np.mean(ecg_clean)) / np.std(ecg_clean)
         scg_clean = (scg_clean - np.mean(scg_clean)) / np.std(scg_clean)
 
-        # ========== Quality gate ==========
 
         return {
             "ecg_raw": ecg_raw,      
-            "scg_raw": scg_raw,      
+            "scg_raw": scg_raw,    
+            
+              
             "ecg_clean": ecg_clean,
             "scg_clean": scg_clean
         }
@@ -230,7 +207,7 @@ class CleanPreprocessingPipeline:
 
 
 
-def plot_ecg_scg_20s(ecg_raw, ecg_clean, scg_raw, scg_clean, fs=500, start_time=0):
+def plot_ecg_scg(ecg_raw, ecg_clean, scg_raw, scg_clean, fs=500, start_time=0):
 
 
     start_idx = int(start_time * fs)
@@ -288,7 +265,7 @@ ecg_clean = cleaned["ecg_clean"]
 scg_raw = cleaned["scg_raw"]
 scg_clean = cleaned["scg_clean"]
 
-plot_ecg_scg_20s(
+plot_ecg_scg(
     cleaned["ecg_raw"],
     cleaned["ecg_clean"],
     cleaned["scg_raw"],
