@@ -181,7 +181,7 @@ class CleanPreprocessingPipeline:
         # ========== ECG cleaning ==========
         ecg_clean = self.cleaner.highpass(ecg_raw)
         ecg_clean = self.cleaner.bandpass(ecg_raw, 1 , 40)
-        ecg_clean = self.cleaner.suppress_motion(scg_clean)
+        ecg_clean = self.cleaner.suppress_motion(ecg_clean)
         ecg_clean = self.cleaner.hampel_filter(ecg_clean)
 
         # ========== SCG cleaning ==========
@@ -198,8 +198,8 @@ class CleanPreprocessingPipeline:
         return {
             "ecg_raw": ecg_raw,      
             "scg_raw": scg_raw,    
-            
-              
+
+
             "ecg_clean": ecg_clean,
             "scg_clean": scg_clean
         }
