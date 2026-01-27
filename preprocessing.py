@@ -2,6 +2,8 @@ import wfdb
 import numpy as np
 from scipy.signal import butter, filtfilt, medfilt
 from scipy.interpolate import interp1d
+from scipy.signal import lfilter
+
 import matplotlib.pyplot as plt
 import pywt
 
@@ -80,17 +82,13 @@ class ArtifactCleaner:
         """
 
         coeffs= pywt.swt(sig,wavelet,level=level)
-
         threshold = lambda c , sigma: pywt.threshold(c, sigma * np.sqrt(2*np.log(len(c))), mode= method)
-        
         new_coeffs =  []
-        
+
         for approx , detail in coeffs :
 
             sigma = np.median(np.abs(detail)) / 0.6745
-
             detail_t = threshold(detail ,sigma)
-
             new_coeffs.append((approx , detail_t))
 
         clean = pywt.iswt(new_coeffs, wavelet)
@@ -123,7 +121,7 @@ class ArtifactCleaner:
 
     # ---- Outlier smoothing ----
 
-    def hampel_filter(self, signal, window=15, n_sigmas=3):
+    def hampel_filter(self, sig, window=15, n_sigmas=3):
 
         """
         Docstring pour hampel_filter
@@ -137,17 +135,32 @@ class ArtifactCleaner:
         """
 
 
-        clean = signal.copy()
-        for i in range(window, len(signal)-window):
-            slice = signal[i-window:i+window]
+        clean = sig.copy()
+        for i in range(window, len(sig)-window):
+            slice = sig[i-window:i+window]
             med = np.median(slice)
             mad = np.median(np.abs(slice - med))
             if mad == 0:
                 continue
-            if np.abs(signal[i] - med) > n_sigmas * mad:
+            if np.abs(sig[i] - med) > n_sigmas * mad:
                 clean[i] = med
         return clean
 
+
+    def adaptive_filter(self , sig, noise, mu=0.01, order=4):
+         
+        """
+        Docstring pour adaptive_filter
+        
+        :param self: Description
+        :param sig: signal
+        :param noise: bruit
+        :param mu: 
+        :param order: 
+        """
+
+        filtered_signal, _, _ = lfilter([mu] * order, 1, sig, zi=noise)
+        return filtered_signal
 
 
 
