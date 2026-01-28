@@ -1,6 +1,6 @@
 # Multimodal ECG/SCG Preprocessing Pipeline
-
-High-performance, modular preprocessing pipeline for multimodal biomedical signals  
+ 
+Modular preprocessing pipeline for multimodal biomedical signals  
 (ECG + SCG from wearable sensors and WFDB datasets).
 
 
