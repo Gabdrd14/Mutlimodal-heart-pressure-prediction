@@ -15,7 +15,6 @@ import pywt
 
 class DataLoader_preprocess_file:
 
-
     def __init__(self, record_path):
         self.record_path = record_path
 
@@ -91,8 +90,6 @@ class ArtifactCleaner:
         b, a = butter(4, [low/(self.fs/2), high/(self.fs/2)], btype="band")
         return filtfilt(b, a, sig)
 
-
-
     def swt_filter(self,sig,wavelet = "db4",level = 2 , method = 'soft'):
 
         """
@@ -140,9 +137,7 @@ class ArtifactCleaner:
 
         clean, _, _ = lfilter([mu] * order, 1, sig, zi=noise)
         return clean
-
-
-    # ---- Outlier smoothing ----
+  # ---- Outlier smoothing ----
 
     def hampel_filter(self, sig, window=15, n_sigmas=3):
 
@@ -169,7 +164,6 @@ class ArtifactCleaner:
                 clean[i] = med
         return clean
 
-
     # ---- Motion artifact SCG / ECG (pacemaker) ----
 
     def suppress_motion(self, scg):
@@ -192,11 +186,23 @@ class ArtifactCleaner:
 # ==============================
 
 class CleanPreprocessingPipeline:
-    def __init__(self, record_path):
-        self.loader = DataLoader_preprocess_file(record_path)
+    def __init__(self, record_path ,method):
+
+        if method == "raw":
+                self.loader = Dataloader_raw_file(record_path)
+        elif method == "process":
+                self.loader = DataLoader_preprocess_file(record_path)
+
+        else:
+            print('methode non ok')
+            return 
+
+        # self.loader = DataLoader_preprocess_file(record_path)
         # self.loader = Dataloader_raw_file(record_path)
 
         self.cleaner = ArtifactCleaner()
+
+
 
     def run(self):
 
@@ -211,6 +217,7 @@ class CleanPreprocessingPipeline:
 
         # # ========== ECG cleaning ==========
         # ecg_clean = self.cleaner.highpass(ecg_raw)
+        # ecg_clean = self.cleaner.bandpass(ecg_clean,1,40)
         # ecg_clean = self.cleaner.suppress_motion(ecg_clean)
         # ecg_clean = self.cleaner.hampel_filter(ecg_clean)
 
@@ -228,7 +235,7 @@ class CleanPreprocessingPipeline:
 
         # ========== Normalize ==========
         ecg_clean = (ecg_clean - np.mean(ecg_clean)) / np.std(ecg_clean)
-        # scg_clean = (scg_clean - np.mean(scg_clean)) / np.std(scg_clean)
+        scg_clean = (scg_clean - np.mean(scg_clean)) / np.std(scg_clean)
 
 
         return {
@@ -244,11 +251,11 @@ class CleanPreprocessingPipeline:
 
 
 
-def plot_ecg_scg(ecg_raw, ecg_clean, scg_raw, scg_clean, fs=500, start_time=20):
+def plot_ecg_scg(ecg_raw, ecg_clean, scg_raw, scg_clean, fs=500, start_time=0):
 
 
     start_idx = int(start_time * fs)
-    end_idx = start_idx   + 10   * fs  # 20-second window
+    end_idx = start_idx   + 40 * fs  # 20-second window
 
     # Slice signals
     ecg_raw_win = ecg_raw[start_idx:end_idx]
@@ -286,21 +293,20 @@ def plot_ecg_scg(ecg_raw, ecg_clean, scg_raw, scg_clean, fs=500, start_time=20):
 # ==============================
 
 
-record_path = "1.0.0/processed_data/TRM107-RHC1"
-# raw_path = "TRM107.RHC1.mat"
+record_path = "1.0.0/processed_data/TRM145-RHC2"
+raw_path = "1.0.0/raw_data/wearable_patch/TRM107.RHC1.mat"
+
+# record = wfdb.rdrecord(record_path)
+# print(record.sig_name)
 
 
-# loader = Dataloader_raw_file(raw_path)
-# data  = loader.load()
+#  Attention la methode raw ne marche pas encore ne pas utiliser
 
+# pipeline_raw = CleanPreprocessingPipeline(raw_path,method="raw")
+pipeline_process = CleanPreprocessingPipeline(record_path ,method="process")
 
-record = wfdb.rdrecord(record_path)
-print(record.sig_name)
-
-pipeline = CleanPreprocessingPipeline(record_path)
-
-cleaned = pipeline.run()
-
+cleaned = pipeline_process.run()
+# cleaned = pipeline_raw.run()
 
 # Extract signals
 ecg_raw = cleaned["ecg_raw"]
@@ -314,5 +320,5 @@ plot_ecg_scg(
     cleaned["scg_raw"],
     cleaned["scg_clean"],
     fs=500,
-    start_time=0  # first 20 seconds
+    start_time=0  # 
 )
