@@ -3,9 +3,11 @@ import numpy as np
 from scipy.signal import butter, filtfilt, medfilt
 from scipy.interpolate import interp1d
 from scipy.signal import lfilter
-from scipy.io import io
+import scipy.io 
 import matplotlib.pyplot as plt
 import pywt
+
+
 
 # ==============================
 # 1. DATA LOADER
@@ -24,22 +26,28 @@ class DataLoader_preprocess_file:
         return dict(zip(names, signals.T))
     
 
-
-class  Dataloader_raw_file:
-    def __init__(self):
-        self.record_path = record_path
-
+class Dataloader_raw_file:
+    def __init__(self, raw_path):
+        self.raw_path = raw_path
 
     def load(self):
-        mat = scipy.io.loadmat(record_path)
-        data = mat['data'][0,0]
-        ecg = data['E_data'].squeeze()
-        t   = data['E_time'].squeeze()
+        mat = scipy.io.loadmat(self.raw_path, simplify_cells=True, verify_compressed_data_integrity=False)
+        data = mat['data']
 
-        # Sécurité
-        N = min(len(ecg), len(t))
-        ecg = ecg[:N]
-        t   = t[:N]
+        signals_dict = {
+            "patch_ECG": np.ravel(data['E_data']),       # ECG
+            "patch_ACC_lat": np.ravel(data['A_data_x']), # SCG / acc X
+            "patch_ACC_hf": np.ravel(data['A_data_y']),  # SCG / acc Y
+            "patch_ACC_dv": np.ravel(data['A_data_z']),  # SCG / acc Z
+            "patch_pressure": np.ravel(data['B_pres']),  # Pressure
+            "patch_temp": np.ravel(data['B_temp']),      # Temperature
+            "patch_humi": np.ravel(data['B_humi'])       # Humidity
+        }
+
+        return signals_dict
+
+
+
 
 # ==============================
 # 2. ARTIFACT REMOVAL
@@ -185,7 +193,9 @@ class ArtifactCleaner:
 
 class CleanPreprocessingPipeline:
     def __init__(self, record_path):
-        self.loader = DataLoader(record_path)
+        self.loader = DataLoader_preprocess_file(record_path)
+        # self.loader = Dataloader_raw_file(record_path)
+
         self.cleaner = ArtifactCleaner()
 
     def run(self):
@@ -277,6 +287,12 @@ def plot_ecg_scg(ecg_raw, ecg_clean, scg_raw, scg_clean, fs=500, start_time=20):
 
 
 record_path = "1.0.0/processed_data/TRM107-RHC1"
+# raw_path = "TRM107.RHC1.mat"
+
+
+# loader = Dataloader_raw_file(raw_path)
+# data  = loader.load()
+
 
 record = wfdb.rdrecord(record_path)
 print(record.sig_name)
