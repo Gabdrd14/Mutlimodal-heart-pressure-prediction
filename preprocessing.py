@@ -41,9 +41,6 @@ class Dataloader_raw_file:
         N = min(len(ecg), len(t))
         ecg = ecg[:N]
         t   = t[:N]
-        
-
-        
                 
         signals_dict = {
             "patch_ECG": ecg ,       # ECG
