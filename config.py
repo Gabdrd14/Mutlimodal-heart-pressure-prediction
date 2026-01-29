@@ -2,7 +2,7 @@
 # Filter parameters
 # ==============================
 
-# Example: you can change these 
+# Example: you can change theses filters
 ECG_FILTERS = [
     {"type": "highpass", "cutoff": 0.5},
     {"type": "bandpass", "low": 1, "high": 40},
