@@ -39,8 +39,8 @@ def load_mat_file(path):
     return {
         "ECG": ecg_raw,
         "SCG": scg_raw,
-        "ECG_clean": ecg_clean,
-        "SCG_clean": scg_clean,
+        "ECG_clean": ecg_clean * 8,
+        "SCG_clean": scg_clean * 8,
         "time": time
     }
 
@@ -55,8 +55,8 @@ def plot_ecg_scg(ecg_raw, ecg_clean, scg_raw, scg_clean,
                  ecg_fs=1000, scg_fs=500, start_time=0, window_s=30):
     """Trace ECG et SCG synchronisés."""
     # Rééchantillonne SCG
-    scg_raw_rs = scg_raw  # resample_signal(scg_raw, scg_fs, ecg_fs)
-    scg_clean_rs = scg_clean #resample_signal(scg_clean, scg_fs, ecg_fs)
+    scg_raw_rs = resample_signal(scg_raw, scg_fs, ecg_fs)
+    scg_clean_rs = resample_signal(scg_clean, scg_fs, ecg_fs)
 
     start_idx = int(start_time * ecg_fs)
     end_idx = start_idx + int(window_s * ecg_fs)
@@ -91,8 +91,8 @@ def plot_ecg_scg(ecg_raw, ecg_clean, scg_raw, scg_clean,
 # ==============================
 
 if __name__ == "__main__":
-    INPUT_FOLDER = "/home/gab/Documents/DEV/PROJECT/Mutlimodal-heart-pressure-prediction/processed_20260129_014214"  # dossier contenant les fichiers
-    start_time = 800
+    INPUT_FOLDER = "processed"  # dossier contenant les fichiers
+    start_time = 820
     window_s = 30
     DEFAULT_ECG_FS = 1000
     DEFAULT_SCG_FS = 500
@@ -114,9 +114,6 @@ if __name__ == "__main__":
             if ecg_raw is None or scg_raw is None:
                 print(f"Signal manquant dans {fname}, skipping.")
                 continue
-
-            # Normalisation simple
-
 
             print(f"Plotting {fname} ...")
             plot_ecg_scg(ecg_raw, ecg_clean, scg_raw, scg_clean,

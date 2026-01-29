@@ -31,7 +31,7 @@ METHOD = "raw" if args.raw else "process"
 # ==============================
 
 DATE = datetime.now().strftime("%Y%m%d_%H%M%S")
-OUT_DIR = f"processed_{DATE}"
+OUT_DIR = f"processed" #_{DATE}"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 

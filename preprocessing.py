@@ -77,7 +77,7 @@ class ArtifactCleaner:
         )
         return filtfilt(b, a, sig)
 
-    # -------- LIGHT HAMPel -------- #
+    # --------  HAMPel -------- #
 
     def hampel_filter(self, sig, kernel=31):
         med = medfilt(sig, kernel)
