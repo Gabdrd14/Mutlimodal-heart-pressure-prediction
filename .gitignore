@@ -1,6 +1,7 @@
 *.mat
 processed/
-raw_signals/
+raws_signals/
 dat_signals/
-
-
+.DS_Store
+__pycache__
+env/
