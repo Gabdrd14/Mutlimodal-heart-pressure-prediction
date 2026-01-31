@@ -51,39 +51,56 @@ def resample_signal(sig, sig_fs, target_fs):
     f = interp1d(t_orig, sig, kind='linear', fill_value="extrapolate")
     return f(t_new)
 
-def plot_ecg_scg(ecg_raw, ecg_clean, scg_raw, scg_clean,
-                 ecg_fs=1000, scg_fs=500, start_time=0, window_s=30):
-    """Trace ECG et SCG synchronisés."""
-    # Rééchantillonne SCG
-    scg_raw_rs = resample_signal(scg_raw, scg_fs, ecg_fs)
+def plot_ecg_scg(ecg_raw, ecg_clean, scg_raw, scg_clean, rhc_signal,
+                 ecg_fs=1000, scg_fs=500, rhc_fs=250,
+                 start_time=0, window_s=30):
+
+    # Resample SCG -> ECG fs
+    scg_raw_rs   = resample_signal(scg_raw, scg_fs, ecg_fs)
     scg_clean_rs = resample_signal(scg_clean, scg_fs, ecg_fs)
 
-    start_idx = int(start_time * ecg_fs)
-    end_idx = start_idx + int(window_s * ecg_fs)
+    # Resample RHC -> ECG fs
+    rhc_rs = resample_signal(rhc_signal, rhc_fs, ecg_fs)
 
-    ecg_raw_win = ecg_raw[start_idx:end_idx]
+    start_idx = int(start_time * ecg_fs)
+    end_idx   = start_idx + int(window_s * ecg_fs)
+
+    ecg_raw_win   = ecg_raw[start_idx:end_idx]
     ecg_clean_win = ecg_clean[start_idx:end_idx]
-    scg_raw_win = scg_raw_rs[start_idx:end_idx]
+
+    scg_raw_win   = scg_raw_rs[start_idx:end_idx]
     scg_clean_win = scg_clean_rs[start_idx:end_idx]
+
+    rhc_win = rhc_rs[start_idx:end_idx]
 
     t = np.arange(len(ecg_raw_win)) / ecg_fs + start_time
 
-    fig, axs = plt.subplots(2, 1, figsize=(14, 6), sharex=True)
+    fig, axs = plt.subplots(3, 1, figsize=(14, 7), sharex=True)
+
+    # ECG
     axs[0].plot(t, ecg_raw_win, label="Raw ECG", alpha=0.6)
-    axs[0].plot(t, ecg_clean_win, label="Clean ECG", alpha=0.8)
-    axs[0].set_title(f"ECG ({window_s}s window)")
+    axs[0].plot(t, ecg_clean_win, label="Clean ECG", alpha=0.9)
+    axs[0].set_title("ECG")
     axs[0].legend()
-    axs[0].grid(True)
+    axs[0].grid()
 
+    # SCG
     axs[1].plot(t, scg_raw_win, label="Raw SCG", alpha=0.6)
-    axs[1].plot(t, scg_clean_win, label="Clean SCG", alpha=0.8)
-    axs[1].set_title(f"SCG ({window_s}s window)")
+    axs[1].plot(t, scg_clean_win, label="Clean SCG", alpha=0.9)
+    axs[1].set_title("SCG")
     axs[1].legend()
-    axs[1].grid(True)
+    axs[1].grid()
 
-    plt.xlabel("Time [s]")
+    # RHC
+    axs[2].plot(t, rhc_win, label="RHC Pressure", color="black")
+    axs[2].set_title("Right Heart Catheter Pressure")
+    axs[2].legend()
+    axs[2].grid()
+
+    plt.xlabel("Time (s)")
     plt.tight_layout()
     plt.show()
+
 
 
 # ==============================
@@ -98,6 +115,7 @@ if __name__ == "__main__":
     window_s = 30
     DEFAULT_ECG_FS = 1000
     DEFAULT_SCG_FS = 500
+    DEFAULT_RHC_FS = 250
 
     for fname in os.listdir(INPUT_FOLDER):
         path = os.path.join(INPUT_FOLDER, fname)
@@ -106,10 +124,9 @@ if __name__ == "__main__":
 
         try:
             
-            rhc_pip = RHCP_Pipeline(f"{DAT_FOLDER}/{fname.removesuffix('.mat').replace('.','-')}")
+            rhc_pip = RHCP_Pipeline(f"{DAT_FOLDER}/{fname.removesuffix('.mat').replace('.','-')}").run()
             
-            a = rhc_pip.run()
-            value_rhc_  = a["RHC_pressure"] 
+            value_rhc  = rhc_pip["RHC_pressure"] 
             
             
             
@@ -121,14 +138,24 @@ if __name__ == "__main__":
             scg_clean = data['SCG_clean']
             
             
-            if ecg_raw is None or scg_raw is None:
+            if ecg_raw is None or scg_raw is None or value_rhc is None:
                 print(f"Signal manquant dans {fname}, skipping.")
                 continue
 
             print(f"Plotting {fname} ...")
-            plot_ecg_scg(ecg_raw, ecg_clean, scg_raw, scg_clean,
-                         ecg_fs=DEFAULT_ECG_FS, scg_fs=DEFAULT_SCG_FS,
-                         start_time=start_time, window_s=window_s)
+            plot_ecg_scg(
+                ecg_raw,
+                ecg_clean,
+                scg_raw,
+                scg_clean,
+                value_rhc,
+                ecg_fs=DEFAULT_ECG_FS,
+                scg_fs=DEFAULT_SCG_FS,
+                rhc_fs=DEFAULT_RHC_FS,
+                start_time=start_time,
+                window_s=window_s
+)
+
 
         except Exception as e:
             print(f"Erreur sur {fname}: {e}")
