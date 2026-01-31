@@ -11,7 +11,6 @@ from  pressure_collector import RHCP_Pipeline
 def load_mat_file(path):
     """
     Charge un fichier .mat et récupère ECG et SCG automatiquement
-    même si la structure est simple (variables directes).
     """
     mat = sio.loadmat(path)
     keys = [k for k in mat.keys() if not k.startswith('__')]
@@ -125,12 +124,9 @@ if __name__ == "__main__":
         try:
             
             rhc_pip = RHCP_Pipeline(f"{DAT_FOLDER}/{fname.removesuffix('.mat').replace('.','-')}").run()
-            
-            value_rhc  = rhc_pip["RHC_pressure"] 
-            
-            
-            
             data = load_mat_file(path)
+
+            value_rhc  = rhc_pip["RHC_pressure"]       
             ecg_raw = data["ECG"]
             scg_raw = data["SCG"]
             t = data["time"]
