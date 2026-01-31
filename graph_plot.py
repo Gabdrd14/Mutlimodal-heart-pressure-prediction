@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 import scipy.io as sio
-
+from  pressure_collector import RHCP_Pipeline
 # ==============================
 # FUNCTIONS
 # ==============================
@@ -92,6 +92,8 @@ def plot_ecg_scg(ecg_raw, ecg_clean, scg_raw, scg_clean,
 
 if __name__ == "__main__":
     INPUT_FOLDER = "processed"  # dossier contenant les fichiers
+    DAT_FOLDER  = 'dat_signals'
+    
     start_time = 820
     window_s = 30
     DEFAULT_ECG_FS = 1000
@@ -103,6 +105,14 @@ if __name__ == "__main__":
             continue
 
         try:
+            
+            rhc_pip = RHCP_Pipeline(f"{DAT_FOLDER}/{fname.removesuffix('.mat').replace('.','-')}")
+            
+            a = rhc_pip.run()
+            value_rhc_  = a["RHC_pressure"] 
+            
+            
+            
             data = load_mat_file(path)
             ecg_raw = data["ECG"]
             scg_raw = data["SCG"]
