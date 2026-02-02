@@ -105,11 +105,18 @@ for fname in os.listdir(INPUT_FOLDER):
 
     ecg_raw = data["ecg_raw"]
     scg_raw = data["scg_raw"]
+    scg_lat = data["patch_ACC_lat"],
+    scg_hf = data["patch_ACC_hf"],
+    scg_dv = data["patch_ACC_dv"],
 
     ecg_clean = engine.apply(ecg_raw, config.ECG_FILTERS)
     scg_clean = engine.apply(scg_raw, config.SCG_FILTERS)
-
+    patch_ACC_lat = engine.apply(scg_lat, config.SCG_FILTERS)
+    patch_ACC_hf = engine.apply(scg_hf, config.SCG_FILTERS)
+    patch_ACC_dv = engine.apply(scg_dv, config.SCG_FILTERS)
+    
     t = data["time_ECG"]
+
     if t is None:
         t = np.arange(len(ecg_raw)) / DEFAULT_FS
 
@@ -118,6 +125,9 @@ for fname in os.listdir(INPUT_FOLDER):
         "scg_raw": scg_raw,
         "ecg_clean": ecg_clean,
         "scg_clean": scg_clean,
+        "patch_ACC_lat" : patch_ACC_lat,
+        "patch_ACC_hf" : patch_ACC_hf ,
+        "patch_ACC_dv" : patch_ACC_dv ,
         "time": t
     }
 
