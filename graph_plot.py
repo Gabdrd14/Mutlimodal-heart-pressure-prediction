@@ -39,8 +39,8 @@ def load_mat_file(path):
     return {
         "ECG": ecg_raw,
         "SCG": scg_raw,
-        "ECG_clean": ecg_clean * 8,
-        "SCG_clean": scg_clean * 8,
+        "ECG_clean": ecg_clean ,
+        "SCG_clean": scg_clean ,
         "time": time
     }
 
@@ -53,7 +53,7 @@ def resample_signal(sig, sig_fs, target_fs):
 
 def plot_ecg_scg(fname,ecg_raw, ecg_clean, scg_raw, scg_clean, rhc_signal,
                  ecg_fs=1000, scg_fs=500, rhc_fs=250,
-                 start_time=0, window_s=30):
+                 start_time=0, window_s=30,ecg_magnification= 1):
 
     # Resample SCG -> ECG fs
     scg_raw_rs   = resample_signal(scg_raw, scg_fs, ecg_fs)
@@ -78,8 +78,8 @@ def plot_ecg_scg(fname,ecg_raw, ecg_clean, scg_raw, scg_clean, rhc_signal,
     fig, axs = plt.subplots(3, 1, figsize=(14, 7), sharex=True)
 
     # ECG
-    axs[0].plot(t, ecg_raw_win, label="Raw ECG", alpha=0.6)
-    axs[0].plot(t, ecg_clean_win, label="Clean ECG", alpha=0.9)
+    axs[0].plot(t, ecg_raw_win * ecg_magnification, label="Raw ECG", alpha=0.6)
+    axs[0].plot(t, ecg_clean_win * ecg_magnification, label="Clean ECG", alpha=0.9)
     axs[0].set_title(f"{fname} ECG")
     axs[0].legend()
     axs[0].grid()
@@ -153,8 +153,11 @@ if __name__ == "__main__":
                 ecg_fs=DEFAULT_ECG_FS,
                 scg_fs=DEFAULT_SCG_FS,
                 rhc_fs=DEFAULT_RHC_FS,
-                start_time=start_time,
-                window_s=window_s
+                start_time=600,
+                window_s=300,
+                ecg_magnification = 4
+
+
 )
 
 
