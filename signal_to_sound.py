@@ -67,9 +67,8 @@ if __name__ == "__main__":
             ecg_segment = ecg_clean[start_idx:end_idx]
 
             ecg_norm = normalize_signal(ecg_segment)
-            ecg_audio = ecg_norm / np.max(np.abs(ecg_norm))
 
-            ecg_audio = resample_signal(ecg_audio, DEFAULT_ECG_FS, AUDIO_FS)
+            ecg_audio = resample_signal(ecg_norm, DEFAULT_ECG_FS, AUDIO_FS)
 
             out_name = fname.replace(".mat", "_ecg.wav")
             out_path = os.path.join(OUTPUT_FOLDER, out_name)
