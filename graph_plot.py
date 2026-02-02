@@ -51,7 +51,7 @@ def resample_signal(sig, sig_fs, target_fs):
     f = interp1d(t_orig, sig, kind='linear', fill_value="extrapolate")
     return f(t_new)
 
-def plot_ecg_scg(ecg_raw, ecg_clean, scg_raw, scg_clean, rhc_signal,
+def plot_ecg_scg(fname,ecg_raw, ecg_clean, scg_raw, scg_clean, rhc_signal,
                  ecg_fs=1000, scg_fs=500, rhc_fs=250,
                  start_time=0, window_s=30):
 
