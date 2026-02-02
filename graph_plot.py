@@ -51,7 +51,7 @@ def resample_signal(sig, sig_fs, target_fs):
     f = interp1d(t_orig, sig, kind='linear', fill_value="extrapolate")
     return f(t_new)
 
-def plot_ecg_scg(ecg_raw, ecg_clean, scg_raw, scg_clean, rhc_signal,
+def plot_ecg_scg(fname,ecg_raw, ecg_clean, scg_raw, scg_clean, rhc_signal,
                  ecg_fs=1000, scg_fs=500, rhc_fs=250,
                  start_time=0, window_s=30):
 
@@ -80,20 +80,20 @@ def plot_ecg_scg(ecg_raw, ecg_clean, scg_raw, scg_clean, rhc_signal,
     # ECG
     axs[0].plot(t, ecg_raw_win, label="Raw ECG", alpha=0.6)
     axs[0].plot(t, ecg_clean_win, label="Clean ECG", alpha=0.9)
-    axs[0].set_title("ECG")
+    axs[0].set_title(f"{fname} ECG")
     axs[0].legend()
     axs[0].grid()
 
     # SCG
     axs[1].plot(t, scg_raw_win, label="Raw SCG", alpha=0.6)
     axs[1].plot(t, scg_clean_win, label="Clean SCG", alpha=0.9)
-    axs[1].set_title("SCG")
+    axs[1].set_title(f"{fname} SCG")
     axs[1].legend()
     axs[1].grid()
 
     # RHC
     axs[2].plot(t, rhc_win, label="RHC Pressure", color="black")
-    axs[2].set_title("Right Heart Catheter Pressure")
+    axs[2].set_title(f"{fname} Right Heart Catheter Pressure")
     axs[2].legend()
     axs[2].grid()
 
@@ -144,6 +144,7 @@ if __name__ == "__main__":
 
             print(f"Plotting {fname} ...")
             plot_ecg_scg(
+                fname,
                 ecg_raw,
                 ecg_clean,
                 scg_raw,
