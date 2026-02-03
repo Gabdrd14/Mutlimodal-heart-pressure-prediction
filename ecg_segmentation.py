@@ -35,7 +35,7 @@ def detect_peaks_ecg(signal, r_idx, fs, window_ms, offset_ms, name_peak):
 
     if name_peak == "P" or name_peak == "T" : 
 
-        peak_idx = np.argmax(np.abs(segment_filt))
+        peak_idx = np.argmax(segment_filt)
         
     else : 
         peak_idx = np.argmin(segment_filt)
@@ -89,7 +89,7 @@ if __name__ == "__main__":
         
         for r in r_peaks:
             
-            p = detect_peaks_ecg(ecg_cleaned, r, fs=DEFAULT_ECG_FS, window_ms=150, offset_ms=80, name_peak="P")
+            p = detect_peaks_ecg(ecg_cleaned, r, fs=DEFAULT_ECG_FS, window_ms=200, offset_ms=80, name_peak="P")
             q = detect_peaks_ecg(ecg_cleaned, r, fs=DEFAULT_ECG_FS, window_ms=40, offset_ms=10, name_peak="Q")
             s = detect_peaks_ecg(ecg_cleaned, r, fs=DEFAULT_ECG_FS, window_ms=40, offset_ms=10, name_peak="S")
             t = detect_peaks_ecg(ecg_cleaned, r, fs=DEFAULT_ECG_FS, window_ms=280, offset_ms=220, name_peak="T")
@@ -126,3 +126,4 @@ if __name__ == "__main__":
         plt.grid()
         plt.legend()
         plt.show()
+
