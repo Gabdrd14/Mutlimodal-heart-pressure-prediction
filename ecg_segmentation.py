@@ -55,9 +55,9 @@ def detect_peaks_ecg(signal, r_idx, fs, window_ms, offset_ms, name_peak):
     if name_peak == "P":
         if amp < 0.05 * r_amp:  
             return None
-        if amp > 0.4 * r_amp:    
+        if amp > 0.7 * r_amp:    
             return None
-
+  
     return start + peak_idx
 
 
