@@ -7,6 +7,11 @@ import neurokit2 as nk
 from scipy.signal import butter, filtfilt
 
 
+def bandpass_qrs(signal, fs, low=1, high=40, order=4):
+
+    b, a = butter(order, [low / (fs / 2), high / (fs / 2)], btype="band")
+    return filtfilt(b, a, signal)
+
 def lowpass_filter(signal, fs=1000, cutoff=15):
    
     b, a = butter(2, cutoff/(fs/2), btype='low')
@@ -17,30 +22,44 @@ def detect_peaks_ecg(signal, r_idx, fs, window_ms, offset_ms, name_peak):
     window_samples = int(window_ms / 1000 * fs)
     offset_samples = int(offset_ms / 1000 * fs)
     
-    if name_peak == "P" or  name_peak == "Q" : 
-    
+  
+    if name_peak in ["P", "Q"]:
         start = max(r_idx - window_samples, 0)
-        end = r_idx - offset_samples
-        segment = signal[start:end]
-        
-    else : 
-        start = max(r_idx + offset_samples, 0)
+        end   = r_idx - offset_samples
+    else:
+        start = r_idx + offset_samples
         end   = min(r_idx + window_samples, len(signal))
-        segment = signal[start:end]
 
-    if start >= end :
+    if start >= end:
         return None
 
-    segment_filt = lowpass_filter(segment, fs=fs, cutoff=10)
+    segment = signal[start:end]
 
-    if name_peak == "P" or name_peak == "T" : 
+    if name_peak in ["Q", "S"]:
+        segment_filt = bandpass_qrs(segment, fs)
+    else:
+        segment_filt = lowpass_filter(segment, fs)
 
+    if name_peak in ["P", "T"]:
         peak_idx = np.argmax(segment_filt)
-        
-    else : 
+    else:
         peak_idx = np.argmin(segment_filt)
-    
+
+    peak_val = segment_filt[peak_idx]
+
+    r_amp = np.abs(signal[r_idx])
+    baseline = np.median(segment_filt)
+    amp = np.abs(peak_val - baseline)
+
+    ### Filtre physio pour onde P : ###
+    if name_peak == "P":
+        if amp < 0.05 * r_amp:  
+            return None
+        if amp > 0.4 * r_amp:    
+            return None
+
     return start + peak_idx
+
 
 
 
@@ -94,10 +113,13 @@ if __name__ == "__main__":
             s = detect_peaks_ecg(ecg_cleaned, r, fs=DEFAULT_ECG_FS, window_ms=40, offset_ms=10, name_peak="S")
             t = detect_peaks_ecg(ecg_cleaned, r, fs=DEFAULT_ECG_FS, window_ms=280, offset_ms=220, name_peak="T")
             
-            if p is not None and q is not None and s is not None and t is not None :
+            if p is not None :  
                 p_peaks.append(p)
+            if q is not None : 
                 q_peaks.append(q)
+            if s is not None : 
                 s_peaks.append(s)
+            if t is not None : 
                 t_peaks.append(t)
 
         p_peaks = np.array(p_peaks)
