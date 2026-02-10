@@ -5,8 +5,9 @@ import numpy as np
 import biosppy.signals.ecg as ecg
 import neurokit2 as nk
 from scipy.signal import butter, filtfilt
+from graph_plot import load_mat_file
 
-
+"""
 def bandpass_qrs(signal, fs, low=1, high=40, order=4):
 
     b, a = butter(order, [low / (fs / 2), high / (fs / 2)], btype="band")
@@ -16,6 +17,7 @@ def lowpass_filter(signal, fs=1000, cutoff=15):
    
     b, a = butter(2, cutoff/(fs/2), btype='low')
     return filtfilt(b, a, signal)
+"""
 
 def detect_peaks_ecg(signal, r_idx, fs, window_ms, offset_ms, name_peak):
 
@@ -35,20 +37,22 @@ def detect_peaks_ecg(signal, r_idx, fs, window_ms, offset_ms, name_peak):
 
     segment = signal[start:end]
 
+    """
     if name_peak in ["Q", "S"]:
         segment_filt = bandpass_qrs(segment, fs)
     else:
         segment_filt = lowpass_filter(segment, fs)
-
+    """
+        
     if name_peak in ["P", "T"]:
-        peak_idx = np.argmax(segment_filt)
+        peak_idx = np.argmax(segment)
     else:
-        peak_idx = np.argmin(segment_filt)
+        peak_idx = np.argmin(segment)
 
-    peak_val = segment_filt[peak_idx]
+    peak_val = segment[peak_idx]
 
     r_amp = np.abs(signal[r_idx])
-    baseline = np.median(segment_filt)
+    baseline = np.median(segment)
     amp = np.abs(peak_val - baseline)
 
     ### Filtre physio pour onde P : ###
@@ -57,7 +61,12 @@ def detect_peaks_ecg(signal, r_idx, fs, window_ms, offset_ms, name_peak):
             return None
         if amp > 0.7 * r_amp:    
             return None
-  
+    
+    ### Filtre physio pour onde T : ###
+    if name_peak == "T":
+        if amp > 0.85 * r_amp:    
+            return None
+
     return start + peak_idx
 
 
@@ -66,7 +75,7 @@ def detect_peaks_ecg(signal, r_idx, fs, window_ms, offset_ms, name_peak):
 if __name__ == "__main__":
     
     
-    INPUT_FOLDER = "raws_signals"
+    INPUT_FOLDER = "processed"
     
     DEFAULT_ECG_FS = 1000
     
@@ -79,24 +88,28 @@ if __name__ == "__main__":
             continue
     
         print(f"Processing {fname} ...")
-        mat = scipy.io.loadmat(path)
-        data = mat['data'][0,0]
-        ecg_raw = data['E_data'].squeeze()
-        t = data['E_time'].squeeze()
+        #mat = scipy.io.loadmat(path)
+        #data = mat['data'][0,0]
+        #ecg_raw = data['E_data'].squeeze()
+        #t = data['E_time'].squeeze()
     
+        data = load_mat_file(path)
+        ecg_clean = data["ECG_clean"]
+        time = data["time"]
+
         start_idx = int(start_time * DEFAULT_ECG_FS)
         end_idx = start_idx + int(window_s * DEFAULT_ECG_FS)
-        if end_idx > len(ecg_raw):
-            end_idx = len(ecg_raw)
+        if end_idx > len(ecg_clean):
+            end_idx = len(ecg_clean)
     
-        ecg_segment = ecg_raw[start_idx:end_idx]
-        t_segment = t[start_idx:end_idx]
+        ecg_segment = ecg_clean[start_idx:end_idx]
+        t_segment = time[start_idx:end_idx]
     
         ### Nettoyage du signal : test du module neurokit2 ###
-        ecg_cleaned = nk.ecg_clean(ecg_segment, sampling_rate=DEFAULT_ECG_FS, method="neurokit")
+        #ecg_cleaned = nk.ecg_clean(ecg_segment, sampling_rate=DEFAULT_ECG_FS, method="neurokit")
     
         ### Détection des R-peaks avec Biosppy ###
-        out = ecg.ecg(signal=ecg_cleaned, sampling_rate=DEFAULT_ECG_FS, show=False)
+        out = ecg.ecg(signal=ecg_segment, sampling_rate=DEFAULT_ECG_FS, show=False)
         r_peaks = out['rpeaks']
         print(f"Nombre de R-peaks détectés: {len(r_peaks)}")
     
@@ -108,10 +121,10 @@ if __name__ == "__main__":
         
         for r in r_peaks:
             
-            p = detect_peaks_ecg(ecg_cleaned, r, fs=DEFAULT_ECG_FS, window_ms=200, offset_ms=80, name_peak="P")
-            q = detect_peaks_ecg(ecg_cleaned, r, fs=DEFAULT_ECG_FS, window_ms=40, offset_ms=10, name_peak="Q")
-            s = detect_peaks_ecg(ecg_cleaned, r, fs=DEFAULT_ECG_FS, window_ms=40, offset_ms=10, name_peak="S")
-            t = detect_peaks_ecg(ecg_cleaned, r, fs=DEFAULT_ECG_FS, window_ms=280, offset_ms=220, name_peak="T")
+            p = detect_peaks_ecg(ecg_segment, r, fs=DEFAULT_ECG_FS, window_ms=200, offset_ms=80, name_peak="P")
+            q = detect_peaks_ecg(ecg_segment, r, fs=DEFAULT_ECG_FS, window_ms=80, offset_ms=10, name_peak="Q")
+            s = detect_peaks_ecg(ecg_segment, r, fs=DEFAULT_ECG_FS, window_ms=80, offset_ms=10, name_peak="S")
+            t = detect_peaks_ecg(ecg_segment, r, fs=DEFAULT_ECG_FS, window_ms=280, offset_ms=220, name_peak="T")
             
             if p is not None :  
                 p_peaks.append(p)
@@ -134,13 +147,13 @@ if __name__ == "__main__":
   
     
         plt.figure(figsize=(14,4))
-        plt.plot(t_segment, ecg_cleaned, color="black", label="ECG Cleaned", linewidth=1.2)
+        plt.plot(t_segment, ecg_segment, color="black", label="ECG Cleaned", linewidth=1.2)
         
-        plt.scatter(t_segment[p_peaks], ecg_cleaned[p_peaks], color="green", label="P Peaks")
-        plt.scatter(t_segment[q_peaks], ecg_cleaned[q_peaks], color="purple", label="Q Peaks")
-        plt.scatter(t_segment[r_peaks], ecg_cleaned[r_peaks], color="red", label="R Peaks")
-        plt.scatter(t_segment[s_peaks], ecg_cleaned[s_peaks], color="yellow", label="S Peaks")
-        plt.scatter(t_segment[t_peaks], ecg_cleaned[t_peaks], color="skyblue", label="T Peaks")
+        plt.scatter(t_segment[p_peaks], ecg_segment[p_peaks], color="green", label="P Peaks")
+        plt.scatter(t_segment[q_peaks], ecg_segment[q_peaks], color="purple", label="Q Peaks")
+        plt.scatter(t_segment[r_peaks], ecg_segment[r_peaks], color="red", label="R Peaks")
+        plt.scatter(t_segment[s_peaks], ecg_segment[s_peaks], color="yellow", label="S Peaks")
+        plt.scatter(t_segment[t_peaks], ecg_segment[t_peaks], color="skyblue", label="T Peaks")
         
         plt.xlabel("Time [s]")
         plt.ylabel("Amplitude")
