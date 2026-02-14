@@ -45,6 +45,7 @@ class FilterEngine:
 
         self.map = {
             "highpass": self.hp,
+            "lowpass": self.lp, 
             "bandpass": self.bp,
             "swt_filter": self.swt,
             "suppress_motion": self.motion,
@@ -53,6 +54,10 @@ class FilterEngine:
 
     def hp(self, sig, p):
         return self.c.highpass(sig, p["cutoff"])
+    
+    def lp(self, sig, p):
+        return self.c.lowpass(sig, p["cutoff"])
+
 
     def bp(self, sig, p):
         return self.c.bandpass(sig, p["low"], p["high"])

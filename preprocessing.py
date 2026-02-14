@@ -68,6 +68,14 @@ class ArtifactCleaner:
             lambda: butter(2, cutoff/(self.fs/2), btype="high")
         )
         return filtfilt(b, a, sig)
+    
+    def lowpass(self, sig, cutoff, order=4):
+
+        nyq = 0.5 * self.fs
+        normal_cutoff = cutoff / nyq
+        b, a = butter(order, normal_cutoff, btype='low', analog=False)
+        return filtfilt(b, a, sig)
+
 
     def bandpass(self, sig, low, high):
         key = ("bp", low, high)
