@@ -2,6 +2,7 @@
 processed/
 raws_signals/
 dat_signals/
+signals_sounds/
 .DS_Store
 __pycache__
 env/

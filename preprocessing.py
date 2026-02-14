@@ -140,5 +140,11 @@ class CleanPreprocessingPipeline:
         return {
             "ecg_raw": ecg_raw,
             "scg_raw": scg_raw,
-            "time_ECG": data.get("time_ECG")
+            "time_ECG": data.get("time_ECG"),
+            "patch_ACC_lat":    data["patch_ACC_lat"],
+            "patch_ACC_hf":    data["patch_ACC_hf"],
+            "patch_ACC_dv":    data["patch_ACC_dv"],
+
+
+
         }
