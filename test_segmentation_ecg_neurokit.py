@@ -60,7 +60,7 @@ if __name__ == "__main__":
         r_peaks = out['rpeaks']
         print(f"Nombre de R-peaks détectés: {len(r_peaks)}")
 
-        ### Détection automatique des pics P, Q, R, S, T avec NeuroKit ###
+        ### Détection automatique des pics P, Q, S, T avec NeuroKit ###
         signals, peaks = nk.ecg_delineate(
             ecg_cleaned,
             r_peaks,

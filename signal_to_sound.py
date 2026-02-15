@@ -11,7 +11,7 @@ def normalize_signal(signal):
     ### Définition du Docstring ##
 
     """
-    On normalise le signal : On le centre sur zéro et on le met à l'amplitude maximale de 1.
+    On normalise le signal.
     
     """
 
