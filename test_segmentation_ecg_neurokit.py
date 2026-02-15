@@ -69,7 +69,7 @@ if __name__ == "__main__":
         plt.scatter(t_segment[p_peaks], ecg_cleaned[p_peaks], color="green", label="P Peaks")
         plt.scatter(t_segment[q_peaks], ecg_cleaned[q_peaks], color="purple", label="Q Peaks")
         plt.scatter(t_segment[r_peaks], ecg_cleaned[r_peaks], color="red", label="R Peaks")
-        plt.scatter(t_segment[s_peaks], ecg_cleaned[s_peaks], color="yellow", label="S Peaks")
+        plt.scatter(t_segment[s_peaks], ecg_cleaned[s_peaks], color="navy", label="S Peaks")
         plt.scatter(t_segment[t_peaks], ecg_cleaned[t_peaks], color="skyblue", label="T Peaks")
 
         plt.xlabel("Time [s]")
