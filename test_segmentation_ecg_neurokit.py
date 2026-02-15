@@ -21,7 +21,7 @@ def safe_indices(peak_list):
 if __name__ == "__main__":
     
     INPUT_FOLDER = "raws_signals"
-    DEFAULT_ECG_FS = 1000 ### Fréquence de L'ECG ###
+    DEFAULT_ECG_FS = 1000 ### Fréquence d'échantillonnage de L'ECG ###
     
     start_time = 820   
     window_s = 30 ### Fenêtre de 30 secondes sur L'ECG ###  
