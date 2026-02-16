@@ -10,6 +10,13 @@ import pywt
 # ==============================
 
 class DataLoaderPreprocessFile:
+
+    """
+    Docstring pour DataLoaderPreprocessFile
+
+        Prend en argument le dossier parent et recupere les signaux .dat
+
+    """
     def __init__(self, record_path):
         self.record_path = record_path
 
@@ -21,6 +28,15 @@ class DataLoaderPreprocessFile:
 
 
 class DataLoaderRawFile:
+
+    """
+    Docstring pour DataLoaderRawFile
+
+        Prend en argument le dossier parent et recupere les signaux .mat
+
+
+    """
+
     def __init__(self, raw_path):
         self.raw_path = raw_path
 
@@ -127,6 +143,13 @@ class ArtifactCleaner:
 # ==============================
 
 class CleanPreprocessingPipeline:
+    """
+    Docstring pour CleanPreprocessingPipeline
+
+
+
+    """
+
     def __init__(self, record_path, method="raw"):
         if method == "raw":
             self.loader = DataLoaderRawFile(record_path)
