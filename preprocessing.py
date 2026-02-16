@@ -64,6 +64,17 @@ class DataLoaderRawFile:
 # ==============================
 
 class ArtifactCleaner:
+
+    """
+    Docstring pour ArtifactCleaner
+
+        Applique les filtres sur les signaux en question
+
+        filtre  : lowpass , highpass , bandpass( low & high) , median , hampel , swt
+
+    """
+
+
     def __init__(self, fs=1000):
         self.fs = fs
         self._filter_cache = {}
@@ -101,7 +112,7 @@ class ArtifactCleaner:
         )
         return filtfilt(b, a, sig)
 
-    # --------  HAMPel -------- #
+    # --------  HAMPEl -------- #
 
     def hampel_filter(self, sig, kernel=31):
         med = medfilt(sig, kernel)
@@ -120,7 +131,9 @@ class ArtifactCleaner:
     def suppress_motion(self, scg):
         return medfilt(scg, kernel_size=5)
 
-    # -------- OPTIONAL HEAVY SWT -------- #
+
+    # --------  SWT -------- #
+
 
     def swt_filter(self, sig, wavelet="db4", level=2, method='soft'):
         if len(sig) % 2 != 0:
@@ -146,7 +159,7 @@ class CleanPreprocessingPipeline:
     """
     Docstring pour CleanPreprocessingPipeline
 
-
+        Main pipeline qui lance le filtrage en fonction du type des fichiers ( raw / process )
 
     """
 

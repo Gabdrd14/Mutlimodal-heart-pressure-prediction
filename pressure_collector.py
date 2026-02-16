@@ -7,6 +7,16 @@ from scipy.signal import resample
 
 
 class RHCP_Pipeline:
+
+    """
+    Docstring pour RHCP_Pipeline
+
+        Récupere les valeurs RHC du patient seulemement présente sur les fichiers .dat
+
+    """
+
+
+
     def __init__(self, record_path, method="raw"):
         self.loader = DataLoaderPreprocessFile(record_path)
         self.data = None   
