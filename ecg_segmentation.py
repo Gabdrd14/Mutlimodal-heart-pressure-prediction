@@ -65,6 +65,21 @@ def detect_peaks_ecg(signal, r_idx, fs, window_ms, offset_ms, name_peak):
     return start + peak_idx
 
 
+def detect_PR_interval(signal, peak_idx_1, peak_idx_2, fs, deriv_thresh=0.01):
+    
+    deriv = np.gradient(signal)
+    
+    start = peak_idx_1
+    while start > 0 and abs(deriv[start]) > deriv_thresh:
+        start -= 1
+        #print(deriv[start])
+    
+    end = peak_idx_2
+    while end < len(signal)-1 and abs(deriv[end]) > deriv_thresh:
+        end -= 1
+        #print(deriv[end])
+    
+    return start, end
 
 
 if __name__ == "__main__":
@@ -115,6 +130,7 @@ if __name__ == "__main__":
         q_peaks = []
         s_peaks = []
         t_peaks = []
+        PR_intervals_list = []
         
         for r in r_peaks:
             
@@ -122,6 +138,12 @@ if __name__ == "__main__":
             q = detect_peaks_ecg(ecg_segment, r, fs=DEFAULT_ECG_FS, window_ms=80, offset_ms=10, name_peak="Q")
             s = detect_peaks_ecg(ecg_segment, r, fs=DEFAULT_ECG_FS, window_ms=80, offset_ms=10, name_peak="S")
             t = detect_peaks_ecg(ecg_segment, r, fs=DEFAULT_ECG_FS, window_ms=280, offset_ms=220, name_peak="T")
+
+            if p is not None and q is not None:
+                start, end = detect_PR_interval(ecg_segment, p, q, DEFAULT_ECG_FS)
+                PR_intervals_list.append((start, end))
+            else:
+                PR_interval = None
             
             if p is not None :  
                 p_peaks.append(p)
@@ -131,16 +153,34 @@ if __name__ == "__main__":
                 s_peaks.append(s)
             if t is not None : 
                 t_peaks.append(t)
-
-        p_peaks = np.array(p_peaks)
-        q_peaks = np.array(q_peaks)
-        s_peaks = np.array(s_peaks)
-        t_peaks = np.array(t_peaks)
         
         print(f"Nombre de P-peaks détectés: {len(p_peaks)}")
         print(f"Nombre de Q-peaks détectés: {len(q_peaks)}")
         print(f"Nombre de S-peaks détectés: {len(s_peaks)}")
         print(f"Nombre de T-peaks détectés: {len(t_peaks)}")
+
+        print(f"\nNombre d'intervalle PR détéctés: {len(PR_intervals_list)}")
+
+        PR_array = np.array(PR_intervals_list)
+
+        PR_starts = PR_array[:, 0]
+        PR_ends = PR_array[:, 1]
+
+        ### Test Temps PR ###
+
+        PR_times = t_segment[PR_array]
+
+        PR_durations = PR_times[:, 1] - PR_times[:, 0]
+
+        PR_mean = np.mean(PR_durations)
+
+        PR_std = np.std(PR_durations)
+
+        ###----###
+
+        print(f"Durée moyenne du PR interval : {PR_mean*1000:.1f} ms")  
+
+        print(f"Ecart-type PR : {PR_std*1000:.1f} ms")  
   
         ### Visualisation du segment ECG avec les pics détectés ###
         plt.figure(figsize=(14,4))
@@ -151,6 +191,11 @@ if __name__ == "__main__":
         plt.scatter(t_segment[r_peaks], ecg_segment[r_peaks], color="red", label="R Peaks")
         plt.scatter(t_segment[s_peaks], ecg_segment[s_peaks], color="navy", label="S Peaks")
         plt.scatter(t_segment[t_peaks], ecg_segment[t_peaks], color="skyblue", label="T Peaks")
+
+      
+        plt.scatter(t_segment[PR_starts], ecg_segment[PR_starts], color="orange", marker="x", s=50, label="PR start")
+        plt.scatter(t_segment[PR_ends], ecg_segment[PR_ends], color="red", marker="x", s=50, label="PR end")
+            
         
         plt.xlabel("Time [s]")
         plt.ylabel("Amplitude")
@@ -158,4 +203,3 @@ if __name__ == "__main__":
         plt.grid()
         plt.legend()
         plt.show()
-
