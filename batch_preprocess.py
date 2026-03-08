@@ -13,7 +13,7 @@ import config
 # ==============================
 
 parser = argparse.ArgumentParser()
-parser.add_argument("-i", "--input", required=True)
+parser.add_argument("-i", "--input", required=True) 
 parser.add_argument("--raw", action="store_true")
 parser.add_argument("--dat", action="store_true")
 
@@ -40,6 +40,13 @@ os.makedirs(OUT_DIR, exist_ok=True)
 # ==============================
 
 class FilterEngine:
+    """
+    Docstring pour FilterEngine
+
+        Class qui va renvoyer les signaux filtrés en fonction du config.py 
+
+    """
+
     def __init__(self, cleaner):
         self.c = cleaner
 
@@ -114,6 +121,8 @@ for fname in os.listdir(INPUT_FOLDER):
     scg_hf = data["patch_ACC_hf"],
     scg_dv = data["patch_ACC_dv"],
 
+
+    # Application du filtrage
     ecg_clean = engine.apply(ecg_raw, config.ECG_FILTERS)
     scg_clean = engine.apply(scg_raw, config.SCG_FILTERS)
     patch_ACC_lat = engine.apply(scg_lat, config.SCG_FILTERS)
@@ -124,6 +133,8 @@ for fname in os.listdir(INPUT_FOLDER):
 
     if t is None:
         t = np.arange(len(ecg_raw)) / DEFAULT_FS
+
+    # Format nouveaux fichiers 
 
     out = {
         "ecg_raw": ecg_raw,
