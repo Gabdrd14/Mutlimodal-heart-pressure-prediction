@@ -3,9 +3,15 @@ import argparse
 import numpy as np
 import scipy.io as sio
 from datetime import datetime
+import time
+import logging
 
 from preprocessing import CleanPreprocessingPipeline, ArtifactCleaner
 import config
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 # ==============================
@@ -81,12 +87,16 @@ class FilterEngine:
         return self.c.suppress_motion(sig)
 
     def hampel(self, sig, p):
-        return self.c.hampel_filter(sig, kernel=p["window"])
+        return self.c.hampel_filter(sig, window=p["window"], n_sigmas=p["n_sigmas"])
 
     def apply(self, sig, filters):
         out = sig
         for f in filters:
-            out = self.map[f["type"]](out, f)
+            try:
+                out = self.map[f["type"]](out, f)
+            except Exception as e:
+                logger.error(f"Error applying filter {f['type']}: {e}")
+                continue
         return out
 
 
@@ -99,6 +109,9 @@ DEFAULT_FS = config.ECG_FILTERS[0].get("fs", 1000)
 cleaner = ArtifactCleaner(fs=DEFAULT_FS)
 engine = FilterEngine(cleaner)
 
+start_time = time.time()
+logger.info("Starting batch processing")
+
 for fname in os.listdir(INPUT_FOLDER):
 
     ext = fname.lower().split(".")[-1]
@@ -108,48 +121,55 @@ for fname in os.listdir(INPUT_FOLDER):
     if METHOD == "process" and ext != "dat":
         continue
 
-    print("Processing:", fname)
+    logger.info(f"Processing: {fname}")
+    file_start_time = time.time()
 
-    path = os.path.join(INPUT_FOLDER, fname)
+    try:
+        path = os.path.join(INPUT_FOLDER, fname)
 
-    pipe = CleanPreprocessingPipeline(path, METHOD)
-    data = pipe.run()
+        pipe = CleanPreprocessingPipeline(path, METHOD)
+        data = pipe.run()
 
-    ecg_raw = data["ecg_raw"]
-    scg_raw = data["scg_raw"]
-    scg_lat = data["patch_ACC_lat"],
-    scg_hf = data["patch_ACC_hf"],
-    scg_dv = data["patch_ACC_dv"],
+        ecg_raw = data["ecg_raw"]
+        scg_raw = data["scg_raw"]
+        scg_lat = data["patch_ACC_lat"],
+        scg_hf = data["patch_ACC_hf"],
+        scg_dv = data["patch_ACC_dv"],
 
 
-    # Application du filtrage
-    ecg_clean = engine.apply(ecg_raw, config.ECG_FILTERS)
-    scg_clean = engine.apply(scg_raw, config.SCG_FILTERS)
-    patch_ACC_lat = engine.apply(scg_lat, config.SCG_FILTERS)
-    patch_ACC_hf = engine.apply(scg_hf, config.SCG_FILTERS)
-    patch_ACC_dv = engine.apply(scg_dv, config.SCG_FILTERS)
-    
-    t = data["time_ECG"]
+        # Application du filtrage
+        ecg_clean = engine.apply(ecg_raw, config.ECG_FILTERS)
+        scg_clean = engine.apply(scg_raw, config.SCG_FILTERS)
+        patch_ACC_lat = engine.apply(scg_lat, config.SCG_FILTERS)
+        patch_ACC_hf = engine.apply(scg_hf, config.SCG_FILTERS)
+        patch_ACC_dv = engine.apply(scg_dv, config.SCG_FILTERS)
+        
+        t = data["time_ECG"]
 
-    if t is None:
-        t = np.arange(len(ecg_raw)) / DEFAULT_FS
+        if t is None:
+            t = np.arange(len(ecg_raw)) / DEFAULT_FS
 
-    # Format nouveaux fichiers 
+        # Format nouveaux fichiers 
 
-    out = {
-        "ecg_raw": ecg_raw,
-        "scg_raw": scg_raw,
-        "ecg_clean": ecg_clean,
-        "scg_clean": scg_clean,
-        "patch_ACC_lat" : patch_ACC_lat,
-        "patch_ACC_hf" : patch_ACC_hf ,
-        "patch_ACC_dv" : patch_ACC_dv ,
-        "time": t
-    }
+        out = {
+            "ecg_raw": ecg_raw,
+            "scg_raw": scg_raw,
+            "ecg_clean": ecg_clean,
+            "scg_clean": scg_clean,
+            "patch_ACC_lat" : patch_ACC_lat,
+            "patch_ACC_hf" : patch_ACC_hf ,
+            "patch_ACC_dv" : patch_ACC_dv ,
+            "time": t
+        }
 
-    out_name = fname.replace(".dat", ".mat")
-    sio.savemat(os.path.join(OUT_DIR, out_name), out)
+        out_name = fname.replace(".dat", ".mat")
+        sio.savemat(os.path.join(OUT_DIR, out_name), out)  
 
-    print("Saved:", out_name)
+        file_end_time = time.time()
+        logger.info(f"Saved {out_name} in {file_end_time - file_start_time:.2f} seconds")
 
-print("Done")
+    except Exception as e:
+        logger.error(f"Error processing {fname}: {e}")
+
+end_time = time.time()
+logger.info(f"Batch processing completed in {end_time - start_time:.2f} seconds")
