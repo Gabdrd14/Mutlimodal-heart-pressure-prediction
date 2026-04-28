@@ -3,7 +3,7 @@ import numpy as np
 from scipy.signal import butter, filtfilt, medfilt
 # from scipy.interpolate import interp1d
 # from scipy.signal import lfilter
-from hampel import hampel
+# from hampel import hampel
 
 import scipy.io as sio
 import pywt

@@ -7,3 +7,5 @@ signals_sounds/
 __pycache__
 env/
 *.npy
+.env
+config.py
