@@ -87,7 +87,7 @@ class FilterEngine:
         return self.c.suppress_motion(sig)
 
     def hampel(self, sig, p):
-        return self.c.hampel_filter(sig, window=p["window"], n_sigmas=p["n_sigmas"])
+        return self.c.hampel_filter(sig)
 
     def apply(self, sig, filters):
         out = sig

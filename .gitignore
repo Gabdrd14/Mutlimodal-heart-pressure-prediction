@@ -6,3 +6,4 @@ signals_sounds/
 .DS_Store
 __pycache__
 env/
+*.npy

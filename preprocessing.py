@@ -1,12 +1,12 @@
 import wfdb
 import numpy as np
 from scipy.signal import butter, filtfilt, medfilt
-from scipy.interpolate import interp1d
-from scipy.signal import lfilter
+# from scipy.interpolate import interp1d
+# from scipy.signal import lfilter
+from hampel import hampel
+
 import scipy.io as sio
-import matplotlib.pyplot as plt
 import pywt
-import time
 import logging
 
 # Setup logging
@@ -122,6 +122,9 @@ class ArtifactCleaner:
         return filtfilt(b, a, sig)
 
     # --------  HAMPEl -------- #
+
+        #  necessite optimisation peut etre avec python -m pip install heartpy. ?
+        #  a voir
 
     def hampel_filter(self, sig, kernel=31):
         med = medfilt(sig, kernel)
