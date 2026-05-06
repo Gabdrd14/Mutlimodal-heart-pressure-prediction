@@ -8,4 +8,8 @@ __pycache__
 env/
 *.npy
 .env
+*.zip
 config.py
+
+scg-rhc-wearable-seismocardiogram-signal-and-right-heart-catheter-database-1.0.0/
+lightning_logs/
