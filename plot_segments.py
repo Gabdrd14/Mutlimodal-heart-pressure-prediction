@@ -1,9 +1,9 @@
 import scipy.io as sio
 import numpy as np
 import matplotlib.pyplot as plt
+import os
 
-
-def plot_mat_file(filepath):
+def plot_mat_file(filepath, filename):
     data = sio.loadmat(filepath)
 
     # 🔹 extract 
@@ -11,11 +11,10 @@ def plot_mat_file(filepath):
     ecg = data["ecg"].squeeze()
     scg = data["scg"].squeeze()
     rhc = data["rhc"].squeeze()
-    # rhc = data.get("rhc", np.zeros_like(ecg)).squeeze()
 
-    # ensure same length
-    # min_len = min(len(ecg), len(scg), len(rhc))
-    # ecg, scg, rhc = ecg[:min_len], scg[:min_len], rhc[:min_len]
+    patch_ACC_lat = data["patch_ACC_lat"].squeeze()
+    patch_ACC_hf  = data["patch_ACC_hf"].squeeze()
+    patch_ACC_dv  = data["patch_ACC_dv"].squeeze()
 
     # 🔥 derivatives (optional but useful)
     vel = np.gradient(scg)
@@ -24,30 +23,45 @@ def plot_mat_file(filepath):
     # 🔹 plot
     plt.figure(figsize=(12, 8))
 
-    plt.subplot(5, 1, 1)
+    plt.subplot(6, 1, 1)
     plt.plot(ecg)
     plt.title("ECG")
     
-    plt.subplot(5, 1, 2)
-    plt.plot(ecg_raw)
-    plt.title("ECG RAW")
+    plt.subplot(6, 1, 2)
+    plt.plot(patch_ACC_lat)
+    plt.title("Patch ACC Lat")
+    
+    plt.subplot(6, 1, 3)
+    plt.plot(patch_ACC_hf)
+    plt.title("Patch ACC HF")
+    
+    
+    plt.subplot(6, 1, 4)
+    plt.plot(patch_ACC_dv)
+    plt.title("Patch AC DV")
 
-    plt.subplot(5, 1, 3)
+    plt.subplot(6, 1, 5)
     plt.plot(scg)
     plt.title("SCG")
 
-    plt.subplot(5, 1, 4)
+    plt.subplot(6, 1, 6)
     plt.plot(rhc)
     plt.title("RHC")
 
-    plt.subplot(5, 1, 5)
-    plt.plot(vel, label="velocity")
-    plt.plot(acc, label="acceleration")
-    plt.legend()
-    plt.title("SCG derivatives")
+    # plt.subplot(5, 1, 6)
+    # plt.plot(vel, label="velocity")
+    # plt.plot(acc, label="acceleration")
+    # plt.legend()
+    # plt.title("SCG derivatives")
+    plt.suptitle(f"File: {filename}")
 
     plt.tight_layout()
     plt.show()
     
     
-plot_mat_file("segments_30s/TRM222_segment.mat")
+
+for fname in os.listdir("segments_30s_strict"):
+    try:
+        plot_mat_file(f"segments_30s_strict/{fname}", fname)
+    except Exception as e:
+        print(f"Error plotting {fname} : {e}")

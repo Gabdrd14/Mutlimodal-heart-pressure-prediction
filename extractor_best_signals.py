@@ -1,556 +1,751 @@
+"""
+Extraction STRICTE des meilleurs segments 30s par patient.
+
+Stratégie:
+1. RHC doit être PARFAIT (pas de sinusoides erratiques, pas de drift, signal stable)
+2. ECG doit être de BONNE qualité (rythme régulier)
+3. SCG doit être de BONNE qualité (pulsatile, bande cardiaque)
+4. Seulement sauvegarder si TOUS les trois critères sont excellents
+5. Pas de fallback - rejeter le patient s'il n'y a rien de parfait
+"""
+
 import os
+import warnings
 import numpy as np
 import scipy.io as sio
-from scipy.signal import resample
-from pressure_collector import RHCP_Pipeline
+from scipy.signal import resample, resample_poly
+from scipy.ndimage import uniform_filter1d
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from math import gcd
+
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 # ==============================
-# CONFIG
+# CONFIG - TRÈS STRICT
 # ==============================
 
 INPUT_FOLDER  = "processed"
-DAT_FOLDER    = "dat_signals"
-OUTPUT_FOLDER = "segments_30s"
+OUTPUT_FOLDER = "segments_30s_strict"
 
-FS          = 1000
+FS          = 500  # WFDB data is sampled at 500 Hz
 WINDOW_S    = 30
 WINDOW_SIZE = FS * WINDOW_S
 
-# How many seconds to skip between candidate windows (increase for speed)
-SEARCH_STRIDE_S = 5
+SEARCH_STRIDE_S = 1
 SEARCH_STRIDE   = SEARCH_STRIDE_S * FS
 
-# Minimum acceptable quality score (0–1). Files below this threshold are skipped.
-MIN_QUALITY_SCORE = 0.3
+TOP_N_SEGMENTS = 1
 
-# Clipping threshold: samples whose absolute value exceeds this fraction of the
-# signal's max are considered clipped.
-CLIP_FRACTION = 0.98
+# Reduced thresholds to be more achievable
+MIN_RHC_SCORE     = 0.80  # Was 0.80
+MIN_ECG_SCORE     = 0.80  # Was 0.80
+MIN_SCG_SCORE     = 0.80  # Was 0.80
+MIN_QUALITY_SCORE = 0.80  # Was 0.80
+
+MAX_OVERLAP_FRAC = 0.0
+MIN_SEP = int(WINDOW_SIZE * (1.0 - MAX_OVERLAP_FRAC))
+
+N_WORKERS = max(1, os.cpu_count() - 1)
+
+CLIP_FRACTION = 0.95
 
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 # ==============================
-# QUALITY SCORING
+# HELPER FUNCTIONS
 # ==============================
 
-# RHC physiological pressure range (mmHg). Segments whose mean falls outside
-# this range are likely artefacts or disconnected catheters.
-RHC_PRESSURE_MIN =  0.0    # mmHg
-RHC_PRESSURE_MAX = 50.0    # mmHg  (right-heart systolic rarely exceeds 50)
+def _fast_detrend(sig: np.ndarray, window_s: float = 3.0) -> np.ndarray:
+    """Fast detrending via uniform_filter1d"""
+    kernel = int(window_s * FS)
+    baseline = uniform_filter1d(sig.astype(np.float64), size=kernel, mode='nearest')
+    return (sig - baseline).astype(np.float32)
 
-
-def signal_quality_score(ecg: np.ndarray, scg: np.ndarray,
-                          rhc: np.ndarray | None = None) -> float:
-    """
-    Composite quality score in [0, 1] for a 30-second window.
-
-    Weights:
-      ECG  40 %  –  most critical for cardiac timing
-      SCG  35 %  –  mechanical signal, different artefact profile from ECG
-      RHC  25 %  –  pressure reference; absent RHC → neutral 0.5 contribution
-    """
-    ecg_score = _score_ecg(ecg)
-    scg_score = _score_scg(scg)
-    rhc_score = _score_rhc(rhc) if rhc is not None else 0.5
-
-    return 0.40 * ecg_score + 0.35 * scg_score + 0.25 * rhc_score
-
-
-# ── Shared helpers ───────────────────────────────────────────────────────────
 
 def _flat_check(sig: np.ndarray) -> float | None:
-    """Return 0.0 immediately if the signal is essentially flat."""
-    if np.var(sig) < 1e-12:
-        return 0.0
-    return None
+    """Return 0.0 if signal is flat (variance too low)"""
+    return 0.0 if np.var(sig) < 1e-12 else None
 
 
-def _kurtosis_score(sig: np.ndarray, low: float = 3.0,
-                    high: float = 10.0, decay: float = 40.0) -> float:
-    """Score ≈ 1 when kurtosis ∈ [low, high]; penalises outliers."""
-    mean = np.mean(sig)
-    std  = np.std(sig) + 1e-12
-    kurt = np.mean(((sig - mean) / std) ** 4)
-    if kurt < low:
-        return kurt / low
-    if kurt <= high:
-        return 1.0
+def _kurtosis_score(sig: np.ndarray, low=3.0, high=10.0, decay=40.0) -> float:
+    """Score kurtosis (peakiness) - should be in sweet spot"""
+    std = np.std(sig) + 1e-12
+    kurt = float(np.mean(((sig - np.mean(sig)) / std) ** 4))
+    if kurt < low:   return kurt / low
+    if kurt <= high: return 1.0
     return max(0.0, 1.0 - (kurt - high) / decay)
 
 
-def _clipping_score(sig: np.ndarray) -> float:
-    """Penalises samples near the signal's absolute maximum (sensor saturation)."""
-    clip_thr   = CLIP_FRACTION * np.max(np.abs(sig))
-    clip_ratio = np.mean(np.abs(sig) >= clip_thr)
-    return max(0.0, 1.0 - clip_ratio * 20.0)   # 5 % clipped → 0
-
-
 def _drift_score(sig: np.ndarray) -> float:
-    """Penalises slow baseline drift via a moving-mean high-pass proxy."""
-    kernel = int(0.5 * FS)
-    if len(sig) <= kernel:
-        return 0.5
-    baseline    = np.convolve(sig, np.ones(kernel) / kernel, mode='same')
+    """Score absence of low-frequency drift"""
+    baseline = uniform_filter1d(sig.astype(np.float64), size=int(0.5 * FS), mode='nearest')
     drift_ratio = np.var(baseline) / (np.var(sig) + 1e-12)
-    return max(0.0, 1.0 - drift_ratio * 2.0)
+    return float(max(0.0, 1.0 - drift_ratio * 2.0))
 
 
-# ── ECG scorer ───────────────────────────────────────────────────────────────
-
-def _score_ecg(ecg: np.ndarray) -> float:
+def _has_null_sections(sig: np.ndarray, null_threshold: float = 1e-6, min_null_fraction: float = 0.01) -> bool:
     """
-    ECG-specific quality score.
-
-    Sub-scores & weights:
-      Flat check   (hard gate)
-      Variance     20 %  – energy present
-      Kurtosis     20 %  – impulsive artefacts
-      Clipping     20 %  – sensor saturation
-      Drift        15 %  – baseline wander
-      R-peak reg.  25 %  – cardiac rhythm present and regular
+    Check if signal has significant null/zero sections (e.g., sensor dropouts, dead periods).
+    Returns True if signal should be REJECTED (has null sections).
     """
-    if (v := _flat_check(ecg)) is not None:
-        return v
-
-    var_score   = min(np.var(ecg) / (np.median(np.abs(ecg)) + 1e-9), 1.0)
-    kurt_score  = _kurtosis_score(ecg, low=3.0, high=10.0, decay=40.0)
-    clip_score  = _clipping_score(ecg)
-    drift_score = _drift_score(ecg)
-    rpeak_score = _rpeak_regularity(ecg)
-
-    return min(
-        0.20 * var_score +
-        0.20 * kurt_score +
-        0.20 * clip_score +
-        0.15 * drift_score +
-        0.25 * rpeak_score,
-        1.0,
-    )
+    is_null = np.abs(sig) < null_threshold
+    null_fraction = float(np.mean(is_null))
+    # Reject if >1% of signal is essentially zero
+    return null_fraction >= min_null_fraction
 
 
-def _rpeak_regularity(ecg: np.ndarray) -> float:
+def _is_ecg_noise(ecg: np.ndarray) -> bool:
     """
-    Detect R-peaks on the squared signal and score the regularity of RR intervals.
-    Score = 1 for a perfectly regular rhythm; 0 for no detected beats.
+    Detect if 'ECG' is just random noise mimicking ECG patterns.
+    Real ECG has:
+      1. Consistent R-wave morphology (amplitude/width consistency)
+      2. Strong spectral content in 5-40 Hz band
+      3. Regular, stable RR intervals
+      4. Not too many peaks (noise = many small random peaks)
+    
+    Returns True if signal should be REJECTED (is noise, not real ECG).
     """
     try:
-        sq    = ecg ** 2
-        thr   = 0.5 * np.max(sq)
-        above = (sq > thr).astype(int)
+        # Detect peaks
+        sq = ecg ** 2
+        threshold = 0.3 * np.max(sq)
+        above = (sq > threshold).astype(np.int8)
         edges = np.where(np.diff(above) == 1)[0]
-
+        
         if len(edges) < 3:
-            return 0.0
-
+            return False  # Too few peaks = not ECG but probably not noise
+        
+        # Check 1: Too many peaks = likely random noise
+        peak_rate = len(edges) / (len(ecg) / FS)  # peaks per second
+        if peak_rate > 3.5:  # Real ECG is ~0.8-2.5 bpm (1-3 Hz), noise can be >3 Hz
+            return True
+        
+        # Check 2: Peak morphology consistency (should be fairly consistent)
+        peak_vals = ecg[edges]
+        peak_heights = np.abs(peak_vals)
+        
+        if len(peak_heights) > 2:
+            peak_cv = np.std(peak_heights) / (np.mean(peak_heights) + 1e-9)
+            # Real ECG R-waves have fairly consistent amplitudes (CV ~0.3-0.6)
+            # Random noise has very high CV (>0.8)
+            if peak_cv > 0.9:
+                return True
+        
+        # Check 3: Spectral content - real ECG has power in 5-40 Hz
+        mag = np.abs(np.fft.rfft(ecg))
+        freqs = np.fft.rfftfreq(len(ecg), d=1.0 / FS)
+        total_pwr = float(np.dot(mag, mag)) + 1e-12
+        
+        # ECG band (5-40 Hz)
+        ecg_mask = (freqs >= 5.0) & (freqs <= 40.0)
+        ecg_pwr = float(np.dot(mag[ecg_mask], mag[ecg_mask]))
+        ecg_ratio = ecg_pwr / total_pwr
+        
+        # Random noise is more white/flat, real ECG concentrated in band
+        if ecg_ratio < 0.25:  # ECG should have >25% in this band
+            return True
+        
+        # Check 4: RR interval stability
         rr = np.diff(edges)
-        rr = rr[(rr > 0.4 * FS) & (rr < 1.5 * FS)]   # plausible 40–150 bpm
-
-        if len(rr) < 2:
-            return 0.0
-
-        cv = np.std(rr) / (np.mean(rr) + 1e-9)        # coefficient of variation
-        return max(0.0, 1.0 - cv * 3.0)
+        rr_filt = rr[(rr > 0.3 * FS) & (rr < 2.0 * FS)]
+        
+        if len(rr_filt) > 2:
+            rr_cv = np.std(rr_filt) / (np.mean(rr_filt) + 1e-9)
+            # Random noise has very unstable intervals (CV > 1.0)
+            # Real ECG has CV ~0.1-0.4
+            if rr_cv > 0.8:
+                return True
+        
+        return False
     except Exception:
-        return 0.0
+        return False
 
 
-# ── SCG scorer ───────────────────────────────────────────────────────────────
+# ==============================
+# RHC SCORER - EXTREMELY STRICT
+# ==============================
 
-def _score_scg(scg: np.ndarray) -> float:
+def _score_rhc_strict(rhc: np.ndarray) -> float:
     """
-    SCG-specific quality score.
-
-    SCG has no sharp R-peaks but carries cardiac mechanical vibrations
-    (10–40 Hz band).  Key failure modes:
-      • Flat / disconnected sensor
-      • Motion artefacts → very high kurtosis
-      • Clipping
-      • Baseline drift
-      • Loss of cardiac frequency content (silent segment within the window)
-
-    Sub-scores & weights:
-      Flat check        (hard gate)
-      Variance          20 %
-      Kurtosis          25 %  – motion artefacts dominate SCG failures
-      Clipping          15 %
-      Drift             15 %
-      Cardiac-band SNR  25 %  – energy in 10–40 Hz vs total
+     RHC SCORING
+    
+    Hard gates (IMMEDIATE REJECTION if triggered):
+      1. Flat signal
+      2. Null sections (sensor dropout)
+      3. Linear drift (R² > 0.50)
+      4. High non-stationarity (half-variance ratio > 4)
+      5. Prolonged flatlines (>0.5s stuck)
+      6. Missing pulsatility anywhere in window
+      7. Extreme pulse pressure (< 3 or > 50 mmHg)
+    
+    Soft scores ONLY if ALL gates pass:
+      Pulse regularity (beat-to-beat consistency)  50%
+      Baseline stationarity                        30%
+      Peak morphology (shape consistency)          20%
     """
-    if (v := _flat_check(scg)) is not None:
-        return v
-
-    var_score    = min(np.var(scg) / (np.median(np.abs(scg)) + 1e-9), 1.0)
-    # SCG is smoother than ECG; ideal kurtosis closer to 3–6
-    kurt_score   = _kurtosis_score(scg, low=2.0, high=6.0, decay=20.0)
-    clip_score   = _clipping_score(scg)
-    drift_score  = _drift_score(scg)
-    band_score   = _cardiac_band_score(scg)
-
-    return min(
-        0.20 * var_score +
-        0.25 * kurt_score +
-        0.15 * clip_score +
-        0.15 * drift_score +
-        0.25 * band_score,
-        1.0,
-    )
-
-
-def _cardiac_band_score(scg: np.ndarray,
-                         low_hz: float = 10.0, high_hz: float = 40.0) -> float:
-    """
-    Estimate the fraction of signal energy in the cardiac mechanical band
-    (10–40 Hz) relative to total energy.  A good SCG segment should have most
-    of its power there; motion artefacts push energy into lower frequencies.
-    """
-    try:
-        fft_mag   = np.abs(np.fft.rfft(scg))
-        freqs     = np.fft.rfftfreq(len(scg), d=1.0 / FS)
-        total_pwr = np.sum(fft_mag ** 2) + 1e-12
-        band_mask = (freqs >= low_hz) & (freqs <= high_hz)
-        band_pwr  = np.sum(fft_mag[band_mask] ** 2)
-        ratio     = band_pwr / total_pwr
-        # A ratio > 0.25 is good; below 0.05 suggests artefact-dominated segment
-        return float(np.clip((ratio - 0.05) / 0.20, 0.0, 1.0))
-    except Exception:
-        return 0.5
-
-
-# ── RHC scorer ───────────────────────────────────────────────────────────────
-
-def _score_rhc(rhc: np.ndarray) -> float:
-    """
-    RHC pressure signal quality score.
-
-    Key failure modes:
-      • Flat line (catheter disconnected or wedged)
-      • Out-of-range mean (physiologically implausible values)
-      • Very low pulsatility (damped / over-wedged waveform)
-      • High-frequency noise / transducer ringing
-
-    Sub-scores & weights:
-      Flat check         (hard gate)
-      Physiological range 30 %  – mean pressure must be plausible
-      Pulsatility         30 %  – pressure should oscillate with heartbeat
-      Noise / ringing     20 %  – kurtosis-based, looser than ECG/SCG
-      Clipping            20 %  – transducer saturation
-    """
+    
+    # Gate 1 - Flat signal
     if (v := _flat_check(rhc)) is not None:
         return v
-
-    # ── 1. Physiological range ───────────────────────────────────────────────
-    mean_p = np.mean(rhc)
-    if mean_p < RHC_PRESSURE_MIN or mean_p > RHC_PRESSURE_MAX:
-        # Clearly out of range → hard reject
+    
+    # Gate 2 - Null/zero sections (NEW)
+    if _has_null_sections(rhc, null_threshold=0.01, min_null_fraction=0.02):
         return 0.0
-    # Soft score: penalise values near the boundaries
-    center    = (RHC_PRESSURE_MIN + RHC_PRESSURE_MAX) / 2.0
-    half_span = (RHC_PRESSURE_MAX - RHC_PRESSURE_MIN) / 2.0
-    range_score = 1.0 - abs(mean_p - center) / half_span
-
-    # ── 2. Pulsatility (peak-to-peak amplitude relative to mean) ────────────
-    # Expect pulse pressure of at least 3 mmHg; over-damped → low score
-    pp        = np.percentile(rhc, 95) - np.percentile(rhc, 5)
-    pulse_score = float(np.clip((pp - 3.0) / 15.0, 0.0, 1.0))
-
-    # ── 3. Noise / ringing  ─────────────────────────────────────────────────
-    # RHC should be smoother than ECG; very high kurtosis → ringing artefact
-    kurt_score = _kurtosis_score(rhc, low=2.0, high=8.0, decay=30.0)
-
-    # ── 4. Clipping ──────────────────────────────────────────────────────────
-    clip_score = _clipping_score(rhc)
-
-    return min(
-        0.30 * range_score +
-        0.30 * pulse_score +
-        0.20 * kurt_score  +
-        0.20 * clip_score,
-        1.0,
-    )
+    
+    # Gate 3 - Linear drift (very strict)
+    x = np.arange(len(rhc), dtype=np.float64)
+    coeffs = np.polyfit(x, rhc.astype(np.float64), 1)
+    trend = np.polyval(coeffs, x)
+    ss_res = float(np.sum((rhc - trend) ** 2))
+    ss_tot = float(np.sum((rhc - np.mean(rhc)) ** 2)) + 1e-12
+    r_squared = 1.0 - ss_res / ss_tot
+    if r_squared > 0.50:  # More than 50% explained by linear trend = REJECT
+        return 0.0
+    
+    # Gate 4 - Stationarity (very strict)
+    half = len(rhc) // 2
+    var1 = float(np.var(rhc[:half])) + 1e-12
+    var2 = float(np.var(rhc[half:])) + 1e-12
+    var_ratio = max(var1, var2) / min(var1, var2)
+    if var_ratio > 4.0:  # Non-stationary = REJECT
+        return 0.0
+    
+    # Gate 5 - Prolonged flatlines (very sensitive)
+    diffs = np.abs(np.diff(rhc))
+    is_flat = (diffs < 0.005).astype(np.float32)
+    kernel_size = int(0.5 * FS)  # 0.5 second window
+    if kernel_size > len(is_flat):
+        return 0.0
+    rolling_flats = uniform_filter1d(is_flat, size=kernel_size, mode='constant', cval=0.0)
+    if np.any(rolling_flats > 0.90):  # 90% flat = REJECT
+        return 0.0
+    
+    # Gate 6 - Pulsatility everywhere (chunked)
+    chunk_len = int(4.0 * FS)  # 4 second chunks
+    n_chunks = len(rhc) // chunk_len
+    for i in range(n_chunks):
+        chunk = rhc[i * chunk_len : (i + 1) * chunk_len]
+        pp = float(np.percentile(chunk, 95) - np.percentile(chunk, 5))
+        if pp < 2.0:  # Pulse pressure too low
+            return 0.0
+    
+    # Gate 7 - Pulse pressure in physiological range
+    pp = float(np.percentile(rhc, 95) - np.percentile(rhc, 5))
+    if pp < 3.0 or pp > 50.0:
+        return 0.0
+    
+    # ===== Soft scores (only if all gates pass) =====
+    
+    rhc_dt = _fast_detrend(rhc)
+    if (v := _flat_check(rhc_dt)) is not None:
+        return v
+    
+    # Score 1: Pulse regularity via autocorrelation
+    try:
+        x = rhc_dt - np.mean(rhc_dt)
+        norm = float(np.dot(x, x))
+        if norm < 1e-12:
+            pulse_reg_sc = 0.0
+        else:
+            n = len(x)
+            nfft = 1 << (2 * n - 1).bit_length()
+            X = np.fft.rfft(x, n=nfft)
+            ac = np.fft.irfft(X * np.conj(X), n=nfft)[:n]
+            ac /= (norm + 1e-12)
+            lag_min = int(0.33 * FS)
+            lag_max = min(int(1.50 * FS), n - 1)
+            if lag_min >= lag_max:
+                pulse_reg_sc = 0.0
+            else:
+                pulse_reg_sc = float(np.clip(np.max(ac[lag_min:lag_max]), 0.0, 1.0))
+    except:
+        pulse_reg_sc = 0.0
+    
+    # Score 2: Stationarity
+    station_sc = float(np.clip(1.0 - (var_ratio - 1.5) / 2.5, 0.0, 1.0))
+    
+    # Score 3: Peak morphology consistency
+    try:
+        peaks = np.where((rhc_dt[1:-1] > rhc_dt[:-2]) & (rhc_dt[1:-1] > rhc_dt[2:]))[0] + 1
+        if len(peaks) < 3:
+            morph_sc = 0.2
+        else:
+            peak_heights = rhc_dt[peaks]
+            cv = float(np.std(peak_heights)) / (float(np.mean(peak_heights)) + 1e-9)
+            morph_sc = float(np.clip(1.0 - cv * 1.5, 0.0, 1.0))
+    except:
+        morph_sc = 0.0
+    
+    # Composite: heavily favor pulse regularity + stationarity
+    final_score = 0.50 * pulse_reg_sc + 0.30 * station_sc + 0.20 * morph_sc
+    return float(np.clip(final_score, 0.0, 1.0))
 
 
 # ==============================
-# BEST-WINDOW SEARCH
+# ECG SCORER
 # ==============================
 
-def find_best_window(ecg: np.ndarray, scg: np.ndarray,
-                      rhc: np.ndarray | None = None) -> tuple[int, float]:
-    """
-    Slide a WINDOW_SIZE window over ecg / scg (and rhc when available) with
-    step SEARCH_STRIDE.  Return (best_start_index, best_score).
-    Early-exit if a near-perfect window (score ≥ 0.9) is found.
-    """
-    n          = len(ecg)
-    best_start = -1
-    best_score = -1.0
-
-    for start in range(0, n - WINDOW_SIZE + 1, SEARCH_STRIDE):
-        end      = start + WINDOW_SIZE
-        rhc_win  = rhc[start:end] if rhc is not None else None
-        score    = signal_quality_score(ecg[start:end], scg[start:end], rhc_win)
-
-        if score > best_score:
-            best_score = score
-            best_start = start
-
-        if best_score >= 0.9:           # good enough → stop early
-            break
-
-    return best_start, best_score
+def _score_ecg_strict(ecg: np.ndarray) -> float:
+    """Score ECG based on rhythm regularity (MORE LENIENT)"""
+    if (v := _flat_check(ecg)) is not None:
+        return v
+    
+    # Reject if signal has null sections
+    if _has_null_sections(ecg, null_threshold=1e-5, min_null_fraction=0.02):
+        return 0.0
+    
+    try:
+        # Detect R-peaks
+        sq = ecg ** 2
+        threshold = 0.3 * np.max(sq)  # More lenient threshold
+        above = (sq > threshold).astype(np.int8)
+        edges = np.where(np.diff(above) == 1)[0]
+        
+        if len(edges) < 3:  # Allow fewer peaks
+            return 0.2  # Return partial score instead of 0
+        
+        rr = np.diff(edges)
+        rr = rr[(rr > 0.3 * FS) & (rr < 2.0 * FS)]  # Wider RR range
+        
+        if len(rr) < 2:  # Allow fewer RR intervals
+            return 0.3
+        
+        # Coefficient of variation of RR intervals (more lenient)
+        cv = np.std(rr) / (np.mean(rr) + 1e-9)
+        rr_regularity = float(max(0.0, 1.0 - cv * 2.5))  # Less penalty for irregularity
+        
+        # Signal quality metrics
+        kurtosis_sc = _kurtosis_score(ecg, 2.0, 15.0, 60.0)  # Wider kurtosis range
+        drift_sc = _drift_score(ecg)
+        
+        # More weight on presence of signal rather than perfect regularity
+        return float(np.clip(0.45*rr_regularity + 0.35*kurtosis_sc + 0.20*drift_sc, 0.0, 1.0))
+        
+    except Exception:
+        return 0.3
 
 
 # ==============================
-# LOAD RHC
+# SCG SCORER
 # ==============================
 
-# Maximum tolerated NaN fraction before a signal is considered unrecoverable.
-MAX_RHC_NAN_RATIO = 0.10   # 10 %
+def _score_scg_strict(scg: np.ndarray) -> float:
+    """Score SCG based on cardiac band power and pulsatility"""
+    if (v := _flat_check(scg)) is not None:
+        return v
+    
+    # Reject if signal has null sections
+    if _has_null_sections(scg, null_threshold=1e-6, min_null_fraction=0.02):
+        return 0.0
+    
+    try:
+        # Frequency domain analysis
+        mag = np.abs(np.fft.rfft(scg))
+        freqs = np.fft.rfftfreq(len(scg), d=1.0 / FS)
+        total_pwr = float(np.dot(mag, mag)) + 1e-12
+        
+        # Cardiac band (5-40 Hz)
+        mask = (freqs >= 5.0) & (freqs <= 40.0)
+        band_pwr = float(np.dot(mag[mask], mag[mask]))
+        band_ratio = band_pwr / total_pwr
+        
+        # # Require HIGH cardiac band power
+        # if band_ratio < 0.35:  # Must be >35%
+        #     return 0.0
+        
+        band_sc = float(np.clip((band_ratio - 0.35) / 0.40, 0.0, 1.0))
+        
+        # Pulsatility (peak-to-peak)
+        pp = float(np.percentile(scg, 95) - np.percentile(scg, 5))
+        if pp < 0.01:  # Too weak
+            return 0.0
+        
+        pulsatility_sc = float(np.clip((pp - 0.01) / 0.1, 0.0, 1.0))
+        
+        # Shape consistency (kurtosis)
+        kurtosis_sc = _kurtosis_score(scg, 2.0, 8.0, 30.0)
+        
+        return float(np.clip(0.50*band_sc + 0.35*pulsatility_sc + 0.15*kurtosis_sc, 0.0, 1.0))
+        
+    except Exception:
+        return 0.0
 
 
-def _interpolate_nans(sig: np.ndarray) -> np.ndarray:
-    """Linear interpolation over NaN runs using valid neighbours."""
-    out   = sig.copy()
-    nans  = np.isnan(out)
-    idx   = np.arange(len(out))
-    valid = ~nans
-    if valid.sum() < 2:
-        return out
-    out[nans] = np.interp(idx[nans], idx[valid], out[valid])
-    return out
+# ==============================
+# RHC LOADER - Load from .mat file
+# ==============================
 
-
-def _edge_fill_nans(sig: np.ndarray) -> np.ndarray:
-    """Forward-fill then backward-fill edge NaNs unreachable by interpolation."""
-    out = sig.copy()
-    last = None
-    for i in range(len(out)):
-        if not np.isnan(out[i]):
-            last = out[i]
-        elif last is not None:
-            out[i] = last
-    nxt = None
-    for i in range(len(out) - 1, -1, -1):
-        if not np.isnan(out[i]):
-            nxt = out[i]
-        elif nxt is not None:
-            out[i] = nxt
-    return out
-
-
-def load_rhc_from_dat(mat_filename: str) -> np.ndarray | None:
-    """
-    Load and clean the RHC pressure signal.
-    Returns a fully valid (NaN-free) float32 array, or None if the signal
-    cannot be recovered. Callers must skip the file when None is returned.
-    """
-    base = mat_filename.replace(".mat", "").replace(".", "-")
-
-    for f in os.listdir(DAT_FOLDER):
-        if not (f.endswith(".dat") and base in f):
-            continue
-        try:
-            record_path = os.path.join(DAT_FOLDER, f.replace(".dat", ""))
-            pipeline    = RHCP_Pipeline(record_path)
-            data        = pipeline.run()
-
-            rhc = np.asarray(data.get("RHC_pressure")).squeeze().astype(np.float32)
-
-            if rhc.ndim == 0 or len(rhc) == 0:
-                print("  [RHC] empty array from pipeline — skipping file")
-                return None
-
-            nan_ratio = float(np.isnan(rhc).mean())
-
-            if nan_ratio == 1.0:
-                print("  [RHC] entirely NaN — skipping file")
-                return None
-
-            if nan_ratio > MAX_RHC_NAN_RATIO:
-                print(f"  [RHC] {nan_ratio*100:.1f}% NaNs — too many to repair, skipping file")
-                return None
-
-            # Repair isolated NaN runs
-            if nan_ratio > 0.0:
-                rhc = _interpolate_nans(rhc)
-                if np.isnan(rhc).any():
-                    rhc = _edge_fill_nans(rhc)
-                # If NaNs still remain after both repair passes, discard
-                if np.isnan(rhc).any():
-                    print("  [RHC] NaNs unrepairable — skipping file")
-                    return None
-                print(f"  [RHC] repaired NaN samples ({nan_ratio*100:.1f}% affected)")
-
+def load_rhc_from_mat(mat_data: dict) -> np.ndarray | None:
+    """Load RHC signal from .mat data dictionary"""
+    # Try primary sources
+    for key in ['rhc_raw', 'rhc_clean', 'RHC_pressure']:
+        if key in mat_data:
+            rhc = np.asarray(mat_data[key]).squeeze().astype(np.float32)
+            if rhc.ndim == 0 or len(rhc) == 0 or np.all(np.isnan(rhc)):
+                continue
+            
+            # Handle NaN values
+            if np.any(np.isnan(rhc)):
+                idx = np.arange(len(rhc))
+                valid = ~np.isnan(rhc)
+                if valid.sum() < 2:
+                    continue
+                rhc[~valid] = np.interp(idx[~valid], idx[valid], rhc[valid])
+            
             return rhc
-
-        except Exception as e:
-            print(f"  [RHC] pipeline failed: {e} — skipping file")
-            return None
-
-    print(f"  [RHC] no .dat file found for {mat_filename} — skipping file")
+    
     return None
+
+
+def _resample_to(sig: np.ndarray, target_len: int) -> np.ndarray:
+    """Resample signal to target length"""
+    if len(sig) == target_len:
+        return sig
+    g = gcd(len(sig), target_len)
+    up, down = target_len // g, len(sig) // g
+    if max(up, down) <= 500:
+        return resample_poly(sig, up, down).astype(np.float32)
+    return resample(sig, target_len).astype(np.float32)
+
+
+# ==============================
+# WINDOW SEARCH
+# ==============================
+
+def find_best_windows(ecg: np.ndarray, scg: np.ndarray, rhc: np.ndarray, top_n: int = TOP_N_SEGMENTS) -> list:
+    """
+    Find perfect windows: RHC first, then ECG+SCG must BOTH be good.
+    No fallback - only save if all three are excellent.
+    """
+    n = len(ecg)
+    
+    # Phase 1: Find RHC windows above threshold
+    rhc_candidates = []
+    for start in range(0, n - WINDOW_SIZE + 1, SEARCH_STRIDE):
+        rhc_sc = _score_rhc_strict(rhc[start:start + WINDOW_SIZE])
+        if rhc_sc >= MIN_RHC_SCORE:
+            rhc_candidates.append((rhc_sc, start))
+    
+    if not rhc_candidates:
+        print(f"  [SEARCH] No RHC windows passed (MIN: {MIN_RHC_SCORE:.2f})")
+        return []
+    
+    rhc_candidates.sort(reverse=True)
+    print(f"  [SEARCH] {len(rhc_candidates)} RHC-excellent window(s) out of {(n - WINDOW_SIZE) // SEARCH_STRIDE + 1}")
+    
+    # Phase 2: For RHC winners, score ECG+SCG
+    scored = []
+    for rhc_sc, start in rhc_candidates:
+        e = start + WINDOW_SIZE
+        ecg_sc = _score_ecg_strict(ecg[start:e])
+        scg_sc = _score_scg_strict(scg[start:e])
+        
+        # Only composite if BOTH ECG and SCG are excellent
+        if ecg_sc >= MIN_ECG_SCORE and scg_sc >= MIN_SCG_SCORE:
+            comp = 0.35 * ecg_sc + 0.40 * scg_sc + 0.25 * rhc_sc
+            scored.append((comp, rhc_sc, ecg_sc, scg_sc, start))
+    
+    if not scored:
+        print(f"  [SEARCH] RHC-excellent but ECG/SCG failed. "
+              f"Min ECG: {MIN_ECG_SCORE:.2f}, Min SCG: {MIN_SCG_SCORE:.2f}")
+        return []
+    
+    scored.sort(reverse=True)
+    
+    # Phase 3: Greedy selection (non-overlapping)
+    selected = []
+    for comp, rhc_sc, ecg_sc, scg_sc, start in scored:
+        if comp < MIN_QUALITY_SCORE:
+            continue
+        if any(abs(start - s) < MIN_SEP for s, *_ in selected):
+            continue
+        selected.append((start, comp, rhc_sc, ecg_sc, scg_sc))
+        if len(selected) == top_n:
+            break
+    
+    # NO FALLBACK - strict mode
+    if not selected:
+        print(f"  [SEARCH] No window met composite threshold ({MIN_QUALITY_SCORE:.2f})")
+        return []
+    
+    return selected
+
+
+# ==============================
+# FILE PROCESSING
+# ==============================
+
+# def process_file(fname: str) -> list[dict]:
+#     """Process a single file"""
+#     results = []
+#     try:
+#         data = sio.loadmat(os.path.join(INPUT_FOLDER, fname))
+        
+#         def _load(key):
+#             return np.asarray(data[key]).squeeze().astype(np.float32)
+        
+#         ecg = _load("ecg_clean")
+#         scg = _load("scg_clean")
+#         ecg_raw = _load("ecg_raw")
+#         scg_raw = _load("scg_raw")
+#         patch_ACC_lat = _load("patch_ACC_lat")
+#         patch_ACC_hf = _load("patch_ACC_hf")
+#         patch_ACC_dv = _load("patch_ACC_dv")
+        
+#         n = min(len(ecg), len(scg), len(ecg_raw), len(scg_raw),
+#                 len(patch_ACC_lat), len(patch_ACC_hf), len(patch_ACC_dv))
+#         ecg, scg = ecg[:n], scg[:n]
+#         ecg_raw, scg_raw = ecg_raw[:n], scg_raw[:n]
+#         patch_ACC_lat = patch_ACC_lat[:n]
+#         patch_ACC_hf = patch_ACC_hf[:n]
+#         patch_ACC_dv = patch_ACC_dv[:n]
+        
+#         if n < WINDOW_SIZE:
+#             return [{"file": fname, "status": "too_short"}]
+        
+#         rhc = load_rhc_from_dat(fname)
+#         if rhc is None:
+#             return [{"file": fname, "status": "no_rhc"}]
+#         if len(rhc) != n:
+#             rhc = _resample_to(rhc, n)
+        
+#         windows = find_best_windows(ecg, scg, rhc, top_n=TOP_N_SEGMENTS)
+        
+#         if not windows:
+#             return [{"file": fname, "status": "rejected"}]
+        
+#         patient_id = fname.replace(".mat", "").split(".")[0]
+        
+#         for rank, (start, comp, rhc_sc, ecg_sc, scg_sc) in enumerate(windows, 1):
+#             s, e = start, start + WINDOW_SIZE
+#             out_path = os.path.join(OUTPUT_FOLDER, f"{patient_id}_segment.mat")
+            
+#             sio.savemat(out_path, {
+#                 "patient": patient_id,
+#                 "ecg": ecg[s:e],
+#                 "scg": scg[s:e],
+#                 "ecg_raw": ecg_raw[s:e],
+#                 "scg_raw": scg_raw[s:e],
+#                 "rhc": rhc[s:e],
+#                 "patch_ACC_lat": patch_ACC_lat[s:e],
+#                 "patch_ACC_hf": patch_ACC_hf[s:e],
+#                 "patch_ACC_dv": patch_ACC_dv[s:e],
+#                 "quality_composite": np.array([comp]),
+#                 "quality_ecg": np.array([ecg_sc]),
+#                 "quality_scg": np.array([scg_sc]),
+#                 "quality_rhc": np.array([rhc_sc]),
+#                 "window_start_s": np.array([s / FS]),
+#                 "window_end_s": np.array([e / FS]),
+#                 "fs": np.array([FS]),
+#             })
+            
+#             print(f"  ✓ [{fname}] {s/FS:.0f}–{e/FS:.0f}s | "
+#                   f"RHC={rhc_sc:.3f} ECG={ecg_sc:.3f} SCG={scg_sc:.3f} "
+#                   f"COMP={comp:.3f}")
+            
+#             results.append({
+#                 "file": fname, "status": "saved",
+#                 "rhc": rhc_sc, "ecg": ecg_sc, "scg": scg_sc, "comp": comp
+#             })
+    
+#     except Exception as exc:
+#         print(f"  ✗ [{fname}] ERROR: {exc}")
+#         results.append({"file": fname, "status": "error", "error": str(exc)})
+    
+#     return results
+
+
+
+# ==============================
+# FILE PROCESSING
+# ==============================
+
+def process_file(fname: str) -> list[dict]:
+    """Process a single file"""
+    results = []
+    try:
+        data = sio.loadmat(os.path.join(INPUT_FOLDER, fname))
+        
+        def _load(key, fallback_keys=None):
+            """Load signal with fallback options"""
+            if key in data:
+                sig = np.asarray(data[key]).squeeze().astype(np.float32)
+                if sig.ndim > 0 and len(sig) > 0:
+                    return sig
+            
+            if fallback_keys:
+                for fb_key in fallback_keys:
+                    if fb_key in data:
+                        sig = np.asarray(data[fb_key]).squeeze().astype(np.float32)
+                        if sig.ndim > 0 and len(sig) > 0:
+                            print(f"    → Using {fb_key} for {key}")
+                            return sig
+            
+            return None
+        
+        # Load ECG with fallbacks
+        ecg_clean = _load("ecg_clean", ["ecg_raw", "ECG_lead_II", "ECG_lead_I"])
+        ecg_raw = _load("ecg_raw", ["ecg_clean", "ECG_lead_II", "ECG_lead_I"])
+        
+        # Load SCG with fallbacks
+        scg_clean = _load("scg_clean", ["scg_raw"])
+        scg_raw = _load("scg_raw", ["scg_clean"])
+        
+        # Load accelerometer components
+        patch_ACC_lat = _load("patch_ACC_lat")
+        patch_ACC_hf = _load("patch_ACC_hf")
+        patch_ACC_dv = _load("patch_ACC_dv")
+        
+        # If no SCG signals, try to create from accelerometer
+        if scg_raw is None or scg_clean is None:
+            if patch_ACC_lat is not None and patch_ACC_hf is not None and patch_ACC_dv is not None:
+                scg_raw = (patch_ACC_lat + patch_ACC_hf + patch_ACC_dv) / 3.0
+                scg_clean = scg_raw.copy()  # Use raw as clean if filter not available
+                print(f"    → Generated SCG from accelerometer components")
+        
+        # Check if we have minimum required signals
+        if ecg_raw is None or ecg_clean is None or scg_raw is None or scg_clean is None:
+            missing = []
+            if ecg_raw is None: missing.append("ecg_raw")
+            if ecg_clean is None: missing.append("ecg_clean")
+            if scg_raw is None: missing.append("scg_raw")
+            if scg_clean is None: missing.append("scg_clean")
+            print(f"  ✗ Missing signals: {', '.join(missing)}")
+            return [{"file": fname, "status": "missing_signals", "missing": missing}]
+        
+        # Ensure all signals are same length
+        n = min(len(ecg_clean), len(ecg_raw), len(scg_clean), len(scg_raw))
+        if patch_ACC_lat is not None:
+            n = min(n, len(patch_ACC_lat))
+        if patch_ACC_hf is not None:
+            n = min(n, len(patch_ACC_hf))
+        if patch_ACC_dv is not None:
+            n = min(n, len(patch_ACC_dv))
+        
+        ecg_clean = ecg_clean[:n]
+        ecg_raw = ecg_raw[:n]
+        scg_clean = scg_clean[:n]
+        scg_raw = scg_raw[:n]
+        
+        if patch_ACC_lat is not None:
+            patch_ACC_lat = patch_ACC_lat[:n]
+        if patch_ACC_hf is not None:
+            patch_ACC_hf = patch_ACC_hf[:n]
+        if patch_ACC_dv is not None:
+            patch_ACC_dv = patch_ACC_dv[:n]
+        
+        if n < WINDOW_SIZE:
+            print(f"  ✗ Signal too short: {n} samples < {WINDOW_SIZE} required")
+            return [{"file": fname, "status": "too_short"}]
+        
+        # Load RHC from .mat file
+        rhc = load_rhc_from_mat(data)
+        if rhc is None:
+            print(f"  ✗ No RHC signal found")
+            return [{"file": fname, "status": "no_rhc"}]
+        
+        if len(rhc) != n:
+            rhc = _resample_to(rhc, n)
+        
+        print(f"  Loaded: ECG={n}, SCG={n}, RHC={len(rhc)}")
+        windows = find_best_windows(ecg_clean, scg_clean, rhc, top_n=15)
+        
+        if not windows:
+            return [{"file": fname, "status": "rejected"}]
+        
+        patient_id = fname.replace(".mat", "").split(".")[0]
+        
+        for rank, (start, comp, rhc_sc, ecg_sc, scg_sc) in enumerate(windows, 1):
+            s, e = start, start + WINDOW_SIZE
+            out_path = os.path.join(OUTPUT_FOLDER, f"{patient_id}_segment_{rank:02d}.mat")
+            
+            out_dict = {
+                "patient": patient_id,
+                "ecg": ecg_clean[s:e],
+                "scg": scg_clean[s:e],
+                "ecg_raw": ecg_raw[s:e],
+                "scg_raw": scg_raw[s:e],
+                "rhc": rhc[s:e],
+                "quality_composite": np.array([comp]),
+                "quality_ecg": np.array([ecg_sc]),
+                "quality_scg": np.array([scg_sc]),
+                "quality_rhc": np.array([rhc_sc]),
+                "window_start_s": np.array([s / FS]),
+                "window_end_s": np.array([e / FS]),
+                "fs": np.array([FS]),
+            }
+            
+            # Add accelerometer data if available
+            if patch_ACC_lat is not None:
+                out_dict["patch_ACC_lat"] = patch_ACC_lat[s:e]
+            if patch_ACC_hf is not None:
+                out_dict["patch_ACC_hf"] = patch_ACC_hf[s:e]
+            if patch_ACC_dv is not None:
+                out_dict["patch_ACC_dv"] = patch_ACC_dv[s:e]
+            
+            sio.savemat(out_path, out_dict)
+            
+            print(f"  ✓ [{fname}] {s/FS:.0f}–{e/FS:.0f}s | "
+                  f"RHC={rhc_sc:.3f} ECG={ecg_sc:.3f} SCG={scg_sc:.3f} "
+                  f"COMP={comp:.3f}")
+            
+            results.append({
+                "file": fname, "status": "saved",
+                "rhc": rhc_sc, "ecg": ecg_sc, "scg": scg_sc, "comp": comp,
+                "rank": rank
+            })
+    
+    except Exception as exc:
+        print(f"  ✗ [{fname}] ERROR: {exc}")
+        import traceback
+        traceback.print_exc()
+        results.append({"file": fname, "status": "error", "error": str(exc)})
+    
+    return results
 
 
 # ==============================
 # MAIN
 # ==============================
 
-print("Starting processing...")
-summary = []   # collect per-patient results for a final report
+if __name__ == "__main__":
+    import time
+    
+    fnames = sorted([f for f in os.listdir(INPUT_FOLDER) if f.endswith(".mat")])
+    print(f"\n{'='*70}")
+    print(f"STRICT SEGMENT EXTRACTION")
+    print(f"{'='*70}")
+    print(f"Files: {len(fnames)} | RHC≥{MIN_RHC_SCORE:.2f} ECG≥{MIN_ECG_SCORE:.2f} SCG≥{MIN_SCG_SCORE:.2f}")
+    print(f"{'='*70}\n")
+    
+    t0 = time.perf_counter()
+    summary = []
+    
+    if N_WORKERS == 1:
+        for fname in fnames:
+            print(f"{fname}")
+            summary.extend(process_file(fname))
+    else:
+        with ProcessPoolExecutor(max_workers=N_WORKERS) as pool:
+            futures = {pool.submit(process_file, f): f for f in fnames}
+            for fut in as_completed(futures):
+                summary.extend(fut.result())
+    
+    elapsed = time.perf_counter() - t0
+    saved = [r for r in summary if r["status"] == "saved"]
+    rejected = [r for r in summary if r["status"] != "saved"]
+    patients_saved = len({r["file"] for r in saved})
+    
+    print(f"\n{'='*70}")
+    print(f"RESULTS: {elapsed:.1f}s")
+    print(f"  ✓ Saved: {len(saved)} segment(s) from {patients_saved}/{len(fnames)} patients")
+    print(f"  ✗ Rejected: {len(rejected)} patient(s)")
+    
+    if saved:
+        scores = {label: [r[key] for r in saved] for label, key in [("RHC", "rhc"), ("ECG", "ecg"), ("SCG", "scg"), ("Composite", "comp")]}
+        for label, vals in scores.items():
+            print(f"  {label:11s}: min={min(vals):.3f}  mean={np.mean(vals):.3f}  max={max(vals):.3f}")
+    
+    print(f"{'='*70}\n")
 
-for fname in sorted(os.listdir(INPUT_FOLDER)):
 
-    if not fname.endswith(".mat"):
-        continue
-
-    print(f"\nProcessing {fname}")
-
-    try:
-        data = sio.loadmat(os.path.join(INPUT_FOLDER, fname))
-
-        # ── Load all signals ────────────────────────────────────────────────
-        ecg          = np.asarray(data["ecg_clean"]).squeeze()
-        scg          = np.asarray(data["scg_clean"]).squeeze()
-        ecg_raw      = np.asarray(data["ecg_raw"]).squeeze()
-        scg_raw      = np.asarray(data["scg_raw"]).squeeze()
-        patch_ACC_lat = np.asarray(data["patch_ACC_lat"]).squeeze()
-        patch_ACC_hf  = np.asarray(data["patch_ACC_hf"]).squeeze()
-        patch_ACC_dv  = np.asarray(data["patch_ACC_dv"]).squeeze()
-
-        # ── Validate that all signals have the same length ──────────────────
-        signal_lengths = {
-            "ecg":          len(ecg),
-            "scg":          len(scg),
-            "ecg_raw":      len(ecg_raw),
-            "scg_raw":      len(scg_raw),
-            "patch_ACC_lat": len(patch_ACC_lat),
-            "patch_ACC_hf":  len(patch_ACC_hf),
-            "patch_ACC_dv":  len(patch_ACC_dv),
-        }
-        n = len(ecg)
-        mismatched = {k: v for k, v in signal_lengths.items() if v != n}
-        if mismatched:
-            print(f"  [WARN] length mismatch: {mismatched} — truncating to shortest")
-            n = min(signal_lengths.values())
-            ecg           = ecg[:n]
-            scg           = scg[:n]
-            ecg_raw       = ecg_raw[:n]
-            scg_raw       = scg_raw[:n]
-            patch_ACC_lat = patch_ACC_lat[:n]
-            patch_ACC_hf  = patch_ACC_hf[:n]
-            patch_ACC_dv  = patch_ACC_dv[:n]
-
-        if n < WINDOW_SIZE:
-            print(f"  Skipping {fname} (recording too short: {n/FS:.1f}s)")
-            summary.append({"file": fname, "status": "too_short"})
-            continue
-
-        # ── Load & resample RHC — mandatory: skip file if unavailable ────────
-        rhc = load_rhc_from_dat(fname)
-        if rhc is None:
-            summary.append({"file": fname, "status": "no_rhc"})
-            continue
-
-        if len(rhc) != n:
-            print(f"  [RHC] resampling from {len(rhc)} to {n} samples")
-            rhc = resample(rhc, n).astype(np.float32)
-            # scipy.resample can introduce edge NaNs via spectral ringing — repair
-            if np.isnan(rhc).any():
-                rhc = _interpolate_nans(rhc)
-            if np.isnan(rhc).any():
-                rhc = _edge_fill_nans(rhc)
-            if np.isnan(rhc).any():
-                print("  [RHC] NaNs after resampling unrepairable — skipping file")
-                summary.append({"file": fname, "status": "no_rhc"})
-                continue
-
-        # ── Find best 30-second window (ECG + SCG + RHC all scored) ──────────
-        best_start, best_score = find_best_window(ecg, scg, rhc)
-
-        s, e = best_start, best_start + WINDOW_SIZE
-
-        # Detailed per-signal breakdown for logging
-        ecg_sc  = _score_ecg(ecg[s:e])
-        scg_sc  = _score_scg(scg[s:e])
-        rhc_sc  = _score_rhc(rhc[s:e])
-
-        print(f"  Best window : {s/FS:.1f}s – {e/FS:.1f}s  "
-              f"(composite={best_score:.3f} | "
-              f"ecg={ecg_sc:.3f}  scg={scg_sc:.3f}  rhc={rhc_sc:.3f})")
-
-        if best_score < MIN_QUALITY_SCORE:
-            print(f"  Skipping {fname} (quality too low: {best_score:.3f} < {MIN_QUALITY_SCORE})")
-            summary.append({"file": fname, "status": "low_quality",
-                             "score": best_score,
-                             "ecg_score": ecg_sc, "scg_score": scg_sc, "rhc_score": rhc_sc})
-            continue
-
-        # ── Extract segments ──────────────────────────────────────────────────
-        ecg_seg           = ecg[s:e]
-        scg_seg           = scg[s:e]
-        ecg_raw_seg       = ecg_raw[s:e]
-        scg_raw_seg       = scg_raw[s:e]
-        patch_ACC_lat_seg = patch_ACC_lat[s:e]
-        patch_ACC_hf_seg  = patch_ACC_hf[s:e]
-        patch_ACC_dv_seg  = patch_ACC_dv[s:e]
-        rhc_seg           = rhc[s:e]
-
-        # Paranoia check — should never trigger given all guards above
-        if np.isnan(rhc_seg).any():
-            print(f"  [ERROR] unexpected NaN in rhc_seg for {fname} — skipping")
-            summary.append({"file": fname, "status": "no_rhc"})
-            continue
-
-        # ── Save ──────────────────────────────────────────────────────────────
-        patient_id = fname.replace(".mat", "").split(".")[0]
-        out_path   = os.path.join(OUTPUT_FOLDER, f"{patient_id}_segment.mat")
-
-        sio.savemat(out_path, {
-            "patient":         patient_id,
-            "ecg":             ecg_seg,
-            "scg":             scg_seg,
-            "ecg_raw":         ecg_raw_seg,
-            "scg_raw":         scg_raw_seg,
-            "rhc":             rhc_seg,
-            "patch_ACC_lat":   patch_ACC_lat_seg,
-            "patch_ACC_hf":    patch_ACC_hf_seg,
-            "patch_ACC_dv":    patch_ACC_dv_seg,
-            # traceability metadata
-            "quality_score":   np.array([best_score]),
-            "quality_ecg":     np.array([ecg_sc]),
-            "quality_scg":     np.array([scg_sc]),
-            "quality_rhc":     np.array([rhc_sc]),
-            "window_start_s":  np.array([s / FS]),
-            "window_end_s":    np.array([e / FS]),
-            "fs":              np.array([FS]),
-        })
-
-        print(f"  Saved → {out_path}")
-        summary.append({"file": fname, "status": "ok", "score": best_score,
-                         "ecg_score": ecg_sc, "scg_score": scg_sc,
-                         "rhc_score": rhc_sc, "start_s": s / FS})
-
-    except Exception as e:
-        print(f"  [ERROR] {fname}: {e}")
-        summary.append({"file": fname, "status": "error", "error": str(e)})
-
-# ── Print summary ────────────────────────────────────────────────────────────
-print("\n" + "=" * 60)
-print(f"DONE — {len(summary)} file(s) processed")
-ok      = [r for r in summary if r["status"] == "ok"]
-no_rhc  = [r for r in summary if r["status"] == "no_rhc"]
-other   = [r for r in summary if r["status"] not in ("ok", "no_rhc")]
-print(f"  Saved        : {len(ok)}")
-print(f"  Skipped (no valid RHC) : {len(no_rhc)}")
-print(f"  Skipped (other)        : {len(other)}")
-if ok:
-    for label, key in [("Composite", "score"), ("ECG", "ecg_score"),
-                        ("SCG", "scg_score"), ("RHC", "rhc_score")]:
-        vals = [r[key] for r in ok if not np.isnan(r.get(key, float("nan")))]
-        if vals:
-            print(f"  {label:10s}: min={min(vals):.3f}  "
-                  f"mean={np.mean(vals):.3f}  max={max(vals):.3f}")
-for r in no_rhc:
-    print(f"  ✗ [no RHC]  {r['file']}")
-for r in other:
-    print(f"  ✗ [{r['status']}]  {r['file']}")
-print("=" * 60)

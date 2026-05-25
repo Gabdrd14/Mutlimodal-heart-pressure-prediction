@@ -26,7 +26,7 @@ class RHCP_Pipeline:
 
         RHC_pressure = data["RHC_pressure"]
         patch_Pre = data["patch_Pre"]
-        ECG_lead_II = data["ECG_lead_II"]
+        # ECG_lead_II = data["ECG_lead_II"]
 
         
 
@@ -35,7 +35,7 @@ class RHCP_Pipeline:
 
         self.data =  {
 
-            "ECG_lead_II" :  ECG_lead_II,
+            # "ECG_lead_II" :  ECG_lead_II,
             "RHC_pressure": RHC_pressure,
             "patch_Pre": patch_Pre,
         }
@@ -50,8 +50,8 @@ class RHCP_Pipeline:
 
 if __name__ == '__main__' : 
 
-    INPUT = 'dat_signals/TRM107-RHC1'
-    RAW = 'raw_signals/TRM107.RHC1'
+    INPUT = 'dat_signals/TRM255-RHC1'
+    RAW = 'raws_signals/TRM255.RHC1'
 
     pipeline = RHCP_Pipeline(INPUT)
     ecg_scg = DataLoaderRawFile(RAW)
@@ -61,7 +61,7 @@ if __name__ == '__main__' :
 
     a = pipeline.run()
     value_rhc_  = a["RHC_pressure"]
-    value_ecg_ = a["ECG_lead_II"]
+    # value_ecg_ = a["ECG_lead_II"]
     print(value_rhc_)
 
 
@@ -79,7 +79,7 @@ if __name__ == '__main__' :
     n_rhc = len(value_rhc_)
 
     # Resample ECG → même longueur que pression
-    ecg_resampled = resample(value_ecg_, n_rhc)
+    # ecg_resampled = resample(value_ecg_, n_rhc)
 
     # Axe temps (secondes)
     t = np.arange(n_rhc) / fs_rhc
@@ -87,7 +87,6 @@ if __name__ == '__main__' :
     # Plot aligné
     plt.figure(figsize=(14,6))
 
-    plt.plot(t, ecg_resampled, label="ECG lead II", alpha=0.7)
     plt.plot(t, value_rhc_, label="RHC pressure", alpha=0.7)
 
     plt.xlabel("Time (s)")
