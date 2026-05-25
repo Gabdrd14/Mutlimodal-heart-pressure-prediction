@@ -1,11 +1,9 @@
 import os
 import argparse
-import numpy as np
-import scipy.io as sio
-from datetime import datetime
 import time
 import logging
-
+import numpy as np
+import scipy.io as sio
 from preprocessing import CleanPreprocessingPipeline, ArtifactCleaner, WFDBDataProcessor
 import config
 
@@ -21,7 +19,6 @@ logger = logging.getLogger(__name__)
 parser = argparse.ArgumentParser(description="Batch preprocessing of medical signal data")
 parser.add_argument("-i", "--input", required=False, help="Input folder path") 
 parser.add_argument("--raw", action="store_true", help="Process raw .mat files")
-parser.add_argument("--dat", action="store_true", help="Process preprocessed .dat files")
 parser.add_argument("--wfdb", action="store_true", help="Process WFDB files from dat_signals/")
 parser.add_argument("-o", "--output", default="processed", help="Output folder (default: processed)")
 
@@ -33,16 +30,14 @@ if args.wfdb:
     METHOD = "wfdb"
     INPUT_FOLDER = "dat_signals"
     PROCESS_ALL_WFDB = True
-elif args.raw or args.dat:
+elif args.raw:
     if not args.input:
-        parser.error("--input is required for --raw and --dat modes")
-    if not (args.raw ^ args.dat):
-        parser.error("Choose --raw or --dat (not both)")
+        parser.error("--input is required for --raw mode")
     INPUT_FOLDER = args.input
-    METHOD = "raw" if args.raw else "process"
+    METHOD = "raw"
     PROCESS_ALL_WFDB = False
 else:
-    parser.error("Choose --raw, --dat, or --wfdb mode")
+    parser.error("Choose --raw or --wfdb mode")
 
 OUTPUT_DIR = args.output
 
@@ -167,40 +162,31 @@ if PROCESS_ALL_WFDB:
                 processor.load()
                 processor.process()
                 
-                # Apply additional filtering if configured
-                if processor.data:
-                    if "ecg_raw" in processor.data and "ecg_clean" not in processor.data:
-                        processor.data["ecg_clean"] = engine.apply(processor.data["ecg_raw"], config.ECG_FILTERS)
-                    if "scg_raw" in processor.data and "scg_clean" not in processor.data:
-                        processor.data["scg_clean"] = engine.apply(processor.data["scg_raw"], config.SCG_FILTERS)
-                
+
                 # Save
                 if processor.save_mat(output_path):
                     successful += 1
                     file_end_time = time.time()
-                    logger.info(f"✓ SUCCESS in {file_end_time - file_start_time:.2f}s")
+                    logger.info(f"SUCCESS in {file_end_time - file_start_time:.2f}s")
                 else:
                     failed += 1
-                    logger.error(f"✗ FAILED to save")
+                    logger.error(f"FAILED to save")
                     
             except Exception as e:
                 failed += 1
-                logger.error(f"✗ ERROR processing {record_name}: {e}")
+                logger.error(f"ERROR processing {record_name}: {e}")
                 import traceback
                 traceback.print_exc()
         
         logger.info(f"\n{'='*70}")
         logger.info(f"WFDB Processing Summary: {successful} successful, {failed} failed")
 
-# ========== RAW/DAT MODE ==========
+# ========== RAW MODE ==========
 else:
     for fname in os.listdir(INPUT_FOLDER):
-
         ext = fname.lower().split(".")[-1]
-
-        if METHOD == "raw" and ext != "mat":
-            continue
-        if METHOD == "process" and ext != "dat":
+        
+        if ext != "mat":
             continue
 
         logger.info(f"Processing: {fname}")
@@ -218,7 +204,6 @@ else:
             scg_hf = data["patch_ACC_hf"]
             scg_dv = data["patch_ACC_dv"]
 
-
             # Application du filtrage
             ecg_clean = engine.apply(ecg_raw, config.ECG_FILTERS)
             scg_clean = engine.apply(scg_raw, config.SCG_FILTERS)
@@ -227,11 +212,8 @@ else:
             patch_ACC_dv = engine.apply(scg_dv, config.SCG_FILTERS)
             
             t = data["time_ECG"]
-
             if t is None:
                 t = np.arange(len(ecg_raw)) / DEFAULT_FS
-
-            # Format nouveaux fichiers 
 
             out = {
                 "ecg_raw": ecg_raw,
@@ -244,7 +226,7 @@ else:
                 "time": t
             }
 
-            out_name = fname.replace(".dat", ".mat")
+            out_name = fname.replace(".mat", ".mat")
             sio.savemat(os.path.join(OUTPUT_DIR, out_name), out)  
 
             file_end_time = time.time()

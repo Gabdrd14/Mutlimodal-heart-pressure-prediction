@@ -171,17 +171,17 @@ class CleanPreprocessingPipeline:
     """
     Docstring pour CleanPreprocessingPipeline
 
-        Main pipeline qui lance le filtrage en fonction du type des fichiers ( raw / process )
+        Main pipeline qui lance le filtrage en fonction du type des fichiers ( raw / wfdb )
 
     """
 
     def __init__(self, record_path, method="raw", fs=500):
         if method == "raw":
             self.loader = DataLoaderRawFile(record_path)
-        elif method == "process":
+        elif method == "wfdb":
             self.loader = DataLoaderPreprocessFile(record_path)
         else:
-            raise ValueError("method must be raw or process")
+            raise ValueError("method must be raw or wfdb")
         
         self.fs = fs  # Sampling frequency (WFDB data is 500 Hz)
         self.cleaner = ArtifactCleaner(fs=fs)
@@ -241,10 +241,10 @@ class WFDBDataProcessor:
             signals = record.p_signal
             names = record.sig_name
             self.signal_dict = dict(zip(names, signals.T))
-            logger.info(f"✓ Loaded signals: {list(self.signal_dict.keys())}")
+            logger.info(f"Loaded signals: {list(self.signal_dict.keys())}")
             return self.signal_dict
         except Exception as e:
-            logger.error(f"✗ Error loading {self.record_path}: {e}")
+            logger.error(f"Error loading {self.record_path}: {e}")
             return None
     
     def process(self):
@@ -261,7 +261,7 @@ class WFDBDataProcessor:
         ecg_clean = self.cleaner.highpass(ecg_raw, cutoff=0.5)
         processed["ecg_raw"] = ecg_raw
         processed["ecg_clean"] = ecg_clean
-        logger.info("✓ Processed Patch_ECG")
+        logger.info("Processed Patch_ECG")
     
         # ========== PATCH ACC -> SCG ==========
         acc_lat = self.signal_dict.get("patch_ACC_lat")
@@ -278,7 +278,7 @@ class WFDBDataProcessor:
         processed["patch_ACC_lat"] = acc_lat
         processed["patch_ACC_hf"] = acc_hf
         processed["patch_ACC_dv"] = acc_dv
-        logger.info("✓ Processed Patch ACC signals and extracted SCG")
+        logger.info("Processed Patch ACC signals and extracted SCG")
         
         # ========== RHC PRESSURE ==========
         # if "RHC_pressure" in self.signal_dict:
@@ -287,7 +287,7 @@ class WFDBDataProcessor:
         rhc_clean = self.cleaner.lowpass(rhc_raw, cutoff=20)
         processed["rhc_raw"] = rhc_raw
         processed["rhc_clean"] = rhc_clean
-        logger.info("✓ Processed RHC_pressure")
+        logger.info("Processed RHC_pressure")
         
         # ========== MAC-LAB ECG SIGNALS ==========
         ecg_leads = ["ECG_lead_I", "ECG_lead_II", "ECG_lead_III", 
@@ -300,7 +300,7 @@ class WFDBDataProcessor:
                 processed[lead] = self.signal_dict[lead].copy()
         
         if any(lead in processed for lead in ecg_leads):
-            logger.info(f"✓ Processed ECG leads: {[l for l in ecg_leads if l in processed]}")
+            logger.info(f"Processed ECG leads: {[l for l in ecg_leads if l in processed]}")
         
         # ========== OTHER MAC-LAB SIGNALS ==========
         other_signals = ["ART", "PLETH", "RESP", "Patch_Hum", "Patch_Pre", "Patch_Temp"]
@@ -309,7 +309,7 @@ class WFDBDataProcessor:
                 processed[signal_name] = self.signal_dict[signal_name].copy()
         
         if any(sig in processed for sig in other_signals):
-            logger.info(f"✓ Processed other signals: {[s for s in other_signals if s in processed]}")
+            logger.info(f"Processed other signals: {[s for s in other_signals if s in processed]}")
         
         # ========== TIME ARRAY ==========
         time_array = np.arange(len(processed.get("ecg_raw", processed.get("rhc_raw", 
@@ -322,15 +322,15 @@ class WFDBDataProcessor:
     def save_mat(self, output_path):
         """Save processed data as .mat file"""
         if self.data is None:
-            logger.error("✗ No processed data to save. Run process() first.")
+            logger.error("No processed data to save. Run process() first.")
             return False
         
         try:
             sio.savemat(output_path, self.data)
-            logger.info(f"✓ Saved to {output_path}")
+            logger.info(f"Saved to {output_path}")
             return True
         except Exception as e:
-            logger.error(f"✗ Error saving {output_path}: {e}")
+            logger.error(f"Error saving {output_path}: {e}")
             return False
     
     def run(self, output_path):
