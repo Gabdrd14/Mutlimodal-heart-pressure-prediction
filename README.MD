@@ -54,4 +54,11 @@ source venv/bin/activate`
 
 ▶ Extract the best segments for the signals 
 
-`python batch_preprocess.py -i path/to/input_folder --wfdb`
+`python extractor_best_signals.py `
+
+
+▶ Lancer le modele transformer
+
+  `python rhc_predictor.py --segments_folder /path/to/the/segments `
+  
+
