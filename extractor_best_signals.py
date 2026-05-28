@@ -455,7 +455,7 @@ def process_file(fname: str) -> list[dict]:
             if scg_raw is None: missing.append("scg_raw")
             if scg_clean is None: missing.append("scg_clean")
             print(f"  ✗ Missing signals: {', '.join(missing)}")
-            return [{"file": fname, "status": "missing_signals", "missing": missing}]
+            return [{"file": fname, "statuts": "missing_signals", "missing": missing}]
         
         n = min(len(ecg_clean), len(ecg_raw), len(scg_clean), len(scg_raw))
         if patch_ACC_lat is not None:
@@ -478,14 +478,14 @@ def process_file(fname: str) -> list[dict]:
             patch_ACC_dv = patch_ACC_dv[:n]
         
         if n < WINDOW_SIZE:
-            print(f"  ✗ Signal too short: {n} samples < {WINDOW_SIZE} required")
+            print(f"  Signal too short: {n} samples < {WINDOW_SIZE} required")
             return [{"file": fname, "status": "too_short"}]
         
         # On charge le signal RHC
         rhc = load_rhc_from_mat(data)
         if rhc is None:
             print(f"  ✗ No RHC signal found")
-            return [{"file": fname, "status": "no_rhc"}]
+            return [{"file": fname, "statuts": "no_rhc"}]
         
         if len(rhc) != n:
             rhc = _resample_to(rhc, n)
@@ -494,7 +494,7 @@ def process_file(fname: str) -> list[dict]:
         windows = find_best_windows(ecg_clean, scg_clean, rhc, top_n=5)
         
         if not windows:
-            return [{"file": fname, "status": "rejected"}]
+            return [{"file": fname, "statuts": "rejected"}]
         
         patient_id = fname.replace(".mat", "").split(".")[0]
         

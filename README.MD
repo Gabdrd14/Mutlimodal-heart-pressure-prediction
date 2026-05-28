@@ -46,13 +46,12 @@ source venv/bin/activate`
 
 
 ## Commands & Usage
-▶ Process raw wearable patch data (.mat)
-
-`python batch_preprocess.py -i path/to/input_folder --raw `
 
 ▶ Process WFDB formatted data (.dat)
 
-`python batch_preprocess.py -i path/to/input_folder --dat`
+`python batch_preprocess.py -i path/to/input_folder --wfdb`
 
 
+▶ Extract the best segments for the signals 
 
+`python batch_preprocess.py -i path/to/input_folder --wfdb`
