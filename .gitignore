@@ -15,4 +15,4 @@ scg-rhc-wearable-seismocardiogram-signal-and-right-heart-catheter-database-1.0.0
 lightning_logs/
 *.ckpt
 tb_logs/
-predict_segments.py
+predict_segment.py
