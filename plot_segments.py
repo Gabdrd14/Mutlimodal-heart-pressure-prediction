@@ -16,11 +16,10 @@ def plot_mat_file(filepath, filename):
     patch_ACC_hf  = data["patch_ACC_hf"].squeeze()
     patch_ACC_dv  = data["patch_ACC_dv"].squeeze()
 
-    # 🔥 derivatives (optional but useful)
     vel = np.gradient(scg)
     acc = np.gradient(vel)
 
-    # 🔹 plot
+    
     plt.figure(figsize=(12, 8))
 
     plt.subplot(6, 1, 1)
