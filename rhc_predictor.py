@@ -524,33 +524,6 @@ def train(segments_folder="segments_30s", output_dir="checkpoints",
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# SMOKE TEST
-# ──────────────────────────────────────────────────────────────────────────────
-
-def smoke_test():
-    print("Running smoke test …")
-    B = 4
-    x = torch.randn(B, N_SIGNALS, WINDOW_SIZE)
-    y = torch.rand(B, N_SECONDS) * 40.0
-
-    model = RHCSequencePredictor()
-    model.eval()
-    with torch.no_grad():
-        pred = model(x)
-
-    assert pred.shape == (B, N_SECONDS), f"Bad output shape: {pred.shape}"
-
-    n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"  ✓ Output shape : {tuple(pred.shape)}  (expected ({B}, {N_SECONDS}))")
-    print(f"  ✓ Parameters   : {n_params:,}")
-
-    lit  = RHCLightningModule()
-    loss = lit._shared_step((x, y), "smoke")
-    print(f"  ✓ Training step OK  (loss={loss.item():.4f})")
-    print("Smoke test passed.")
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 # CLI
 # ──────────────────────────────────────────────────────────────────────────────
 
