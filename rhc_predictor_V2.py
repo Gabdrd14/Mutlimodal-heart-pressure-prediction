@@ -20,7 +20,8 @@ Nouveaux channels utilisés :
                qt_median, qt_mean, qtc_median, qtc_mean,
                pep_median, pep_mean, et_median, et_mean,
                ivct_median, ivct_mean, ivrt_median, ivrt_mean
-  Beat-by-beat : rr_bb, pr_bb, qt_bb, qtc_bb, pep_bb, et_bb, ivct_bb, ivrt_bb
+  Beat-by-beat (ECG) : rr_bb, pr_bb, qt_bb, qtc_bb
+  Beat-by-beat (SCG) : pep_bb, et_bb, ivct_bb, ivrt_bb
 
 Perte : 0.7 * MSE + 0.3 * MAE + SMOOTH_LAMBDA * smoothness
 
@@ -59,11 +60,7 @@ SIGNAL_KEYS = [
     "ecg", "scg",
     "patch_ACC_lat", "patch_ACC_hf", "patch_ACC_dv",
 ]
-N_SIGNALS = len(SIGNAL_KEYS)  # 7
-
-#ACC_INDICES = [
-    #i for i, k in enumerate(SIGNAL_KEYS)
-    #if k in ["patch_ACC_lat", "patch_ACC_hf", "patch_ACC_dv"]
+N_SIGNALS = len(SIGNAL_KEYS)  # 5
 
 # --- Branche 2 : scalaires par segment ---
 SCALAR_KEYS = [
@@ -80,12 +77,13 @@ SCALAR_KEYS = [
 N_SCALAR = len(SCALAR_KEYS)   # 18
 
 # --- Branche 3 : séries beat-by-beat ---
-BB_KEYS = [
-    "rr_bb_ms", "pr_bb_ms", "qt_bb_ms", "qtc_bb_ms",
-    "pep_bb_ms", "et_bb_ms", "ivct_bb_ms", "ivrt_bb_ms",
-]
-N_BB = len(BB_KEYS)            # 8
-BB_LEN = N_SECONDS             # on resample à 30 points
+# ECG-derived : rr, pr, qt, qtc
+# SCG-derived : pep, et, ivct, ivrt
+BB_ECG_KEYS = ["rr_bb_ms", "pr_bb_ms", "qt_bb_ms", "qtc_bb_ms"]
+BB_SCG_KEYS = ["pep_bb_ms", "et_bb_ms", "ivct_bb_ms", "ivrt_bb_ms"]
+BB_KEYS     = BB_ECG_KEYS + BB_SCG_KEYS
+N_BB        = len(BB_KEYS)            # 8
+BB_LEN      = N_SECONDS               # on resample à 30 points
 
 # --- Architecture ---
 CNN_CHANNELS  = [1, 32, 64, 128]
@@ -141,8 +139,8 @@ def load_bb(mat: dict, key: str, target_len: int = BB_LEN) -> np.ndarray:
     if nans.all():
         return np.zeros(target_len, dtype=np.float32)
     if nans.any():
-        x    = np.arange(len(arr))
-        arr  = np.interp(x, x[~nans], arr[~nans]).astype(np.float32)
+        x   = np.arange(len(arr))
+        arr = np.interp(x, x[~nans], arr[~nans]).astype(np.float32)
 
     # Resample vers target_len via interpolation
     x_src = np.linspace(0, 1, len(arr))
@@ -160,14 +158,15 @@ class RHCDataset(Dataset):
     """
     Retourne :
       x_sig    : (N_SIGNALS, 15000) float32  — signaux temporels normalisés
-      x_scalar : (N_SCALAR,)        float32  — scalaires normalisés
-      x_bb     : (N_BB, BB_LEN)     float32  — beat-by-beat normalisés
+      x_scalar : (N_SCALAR,)        float32  — scalaires normalisés (global)
+      x_bb     : (N_BB, BB_LEN)     float32  — beat-by-beat normalisés (global)
       y        : (N_SECONDS,)       float32  — RHC par seconde normalisé
     """
 
     def __init__(self, segments_folder: str, augment: bool = False,
                  rhc_mean: float = None, rhc_std: float = None,
-                 scalar_mean: np.ndarray = None, scalar_std: np.ndarray = None):
+                 scalar_mean: np.ndarray = None, scalar_std: np.ndarray = None,
+                 bb_mean: np.ndarray = None, bb_std: np.ndarray = None):
         self.folder  = Path(segments_folder)
         self.augment = augment
         self.files   = sorted(self.folder.glob("*_seg*.mat")) or \
@@ -206,7 +205,24 @@ class RHCDataset(Dataset):
             self.scalar_mean = scalar_mean
             self.scalar_std  = scalar_std
 
+        # Normalisation beat-by-beat (globale)
+        if bb_mean is None or bb_std is None:
+            self.bb_mean, self.bb_std = self._compute_bb_stats()
+        else:
+            self.bb_mean = bb_mean
+            self.bb_std  = bb_std
+
+    # ------------------------------------------------------------------
+    # Stats helpers
+    # ------------------------------------------------------------------
+
     def _compute_rhc_stats(self):
+
+        """
+        On calcule la moyenne et l'écart-type globaux de la pression RHC par seconde
+        sur tout le dataset (train + val + test) pour la normalisation.
+        
+        """
         all_vals = []
         for f in self.files:
             mat = sio.loadmat(f)
@@ -218,21 +234,46 @@ class RHCDataset(Dataset):
         return float(np.mean(all_vals)), float(np.std(all_vals)) + 1e-8
 
     def _compute_scalar_stats(self):
-        """Calcule mean/std de chaque scalaire sur le train set."""
+
+        """
+        On calcule la moyenne et l'écart-type globaux de chaque scalaire sur tout le dataset.
+        On empile tous les scalaires → (N_files, N_SCALAR) puis stats
+        
+        """
+
         all_scalars = []
         for f in self.files:
             mat = sio.loadmat(f)
             row = [load_scalar(mat, k) for k in SCALAR_KEYS]
             all_scalars.append(row)
-        arr = np.array(all_scalars, dtype=np.float32)   # (N, N_SCALAR)
-        # Remplacer NaN par la médiane de chaque colonne
+        arr = np.array(all_scalars, dtype=np.float32)
         for j in range(arr.shape[1]):
-            col = arr[:, j]
+            col    = arr[:, j]
             median = np.nanmedian(col)
             arr[np.isnan(arr[:, j]), j] = median
         mean = np.nanmean(arr, axis=0)
         std  = np.nanstd(arr,  axis=0) + 1e-8
         return mean, std
+
+    def _compute_bb_stats(self):
+        """
+        Calcule mean/std globales de chaque canal BB sur tout le dataset.
+        On empile tous les segments → (N_files * BB_LEN, N_BB) puis stats.
+        """
+        all_bb = []
+        for f in self.files:
+            mat = sio.loadmat(f)
+            row = [load_bb(mat, k, target_len=BB_LEN) for k in BB_KEYS]
+            all_bb.append(np.stack(row, axis=0))   # (N_BB, BB_LEN)
+
+        arr = np.stack(all_bb, axis=0)             # (N_files, N_BB, BB_LEN)
+        # Reshape : (N_files * BB_LEN, N_BB) pour avoir les stats par canal
+        arr  = arr.transpose(0, 2, 1).reshape(-1, N_BB)
+        mean = np.nanmean(arr, axis=0)             # (N_BB,)
+        std  = np.nanstd(arr,  axis=0) + 1e-8
+        return mean, std
+
+    # ------------------------------------------------------------------
 
     def __len__(self):
         return len(self.files)
@@ -249,28 +290,27 @@ class RHCDataset(Dataset):
         y = (y - self.rhc_mean) / self.rhc_std
         y = torch.from_numpy(y)
 
-        # --- x_sig : signaux temporels (7, 15000) ---
+        # --- x_sig : signaux temporels (N_SIGNALS, 15000) — normalisation locale ---
         channels = []
         for key in SIGNAL_KEYS:
             sig = np.asarray(mat[key]).squeeze().astype(np.float32)
             sig = (sig - sig.mean()) / (sig.std() + 1e-8)
             channels.append(sig)
-        x_sig = torch.from_numpy(np.stack(channels, axis=0))   # (7, 15000)
+        x_sig = torch.from_numpy(np.stack(channels, axis=0))   # (N_SIGNALS, 15000)
 
-        # --- x_scalar : scalaires normalisés (N_SCALAR,) ---
-        scalars = np.array([load_scalar(mat, k) for k in SCALAR_KEYS],
-                           dtype=np.float32)
-        # Remplacer NaN par la moyenne du train
+        # --- x_scalar : scalaires — normalisation globale (N_SCALAR,) ---
+        scalars  = np.array([load_scalar(mat, k) for k in SCALAR_KEYS],
+                            dtype=np.float32)
         nan_mask = np.isnan(scalars)
         scalars[nan_mask] = self.scalar_mean[nan_mask]
-        scalars = (scalars - self.scalar_mean) / self.scalar_std
+        scalars  = (scalars - self.scalar_mean) / self.scalar_std
         x_scalar = torch.from_numpy(scalars)                    # (N_SCALAR,)
 
-        # --- x_bb : beat-by-beat (N_BB, BB_LEN) ---
+        # --- x_bb : beat-by-beat — normalisation globale (N_BB, BB_LEN) ---
         bb_channels = []
-        for key in BB_KEYS:
-            arr = load_bb(mat, key, target_len=BB_LEN)
-            arr = (arr - arr.mean()) / (arr.std() + 1e-8)
+        for i, key in enumerate(BB_KEYS):
+            arr = load_bb(mat, key, target_len=BB_LEN)          # (BB_LEN,)
+            arr = (arr - self.bb_mean[i]) / self.bb_std[i]
             bb_channels.append(arr)
         x_bb = torch.from_numpy(np.stack(bb_channels, axis=0))  # (N_BB, BB_LEN)
 
@@ -282,10 +322,10 @@ class RHCDataset(Dataset):
     @staticmethod
     def _augment(x_sig, x_scalar, x_bb):
         # Bruit amplitude sur les signaux temporels
-        x_sig    = x_sig * (1.0 + 0.10 * (torch.rand(x_sig.shape[0], 1) * 2 - 1))
-        x_sig    = x_sig + 0.02 * torch.randn_like(x_sig)
+        x_sig = x_sig * (1.0 + 0.10 * (torch.rand(x_sig.shape[0], 1) * 2 - 1))
+        x_sig = x_sig + 0.02 * torch.randn_like(x_sig)
         # Flip axes accéléromètre
-        for i in range(2,5):
+        for i in range(2, 5):
             if torch.rand(1).item() > 0.5:
                 x_sig[i] = -x_sig[i]
         # Bruit léger sur scalaires et bb
@@ -295,7 +335,7 @@ class RHCDataset(Dataset):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# BRANCHE 1 : SignalEncoder (identique à v1)
+# BRANCHE 1 : SignalEncoder
 # ──────────────────────────────────────────────────────────────────────────────
 
 class SignalEncoder(nn.Module):
@@ -369,9 +409,8 @@ class ScalarEncoder(nn.Module):
         )
 
     def forward(self, x: torch.Tensor, t: int = N_SECONDS) -> torch.Tensor:
-        # x : (B, N_SCALAR)
-        h = self.mlp(x)                  # (B, D_SCALAR)
-        return h.unsqueeze(1).expand(-1, t, -1)   # (B, T, D_SCALAR)
+        h = self.mlp(x)                                    # (B, D_SCALAR)
+        return h.unsqueeze(1).expand(-1, t, -1)            # (B, T, D_SCALAR)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -380,7 +419,7 @@ class ScalarEncoder(nn.Module):
 
 class BeatByBeatEncoder(nn.Module):
     """
-    CNN 1D léger sur les séries beat-by-beat.
+    CNN 1D léger sur les séries beat-by-beat (normalisées globalement).
     (B, N_BB, BB_LEN=30) → (B, T=30, D_BB)
     """
 
@@ -397,13 +436,12 @@ class BeatByBeatEncoder(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x : (B, N_BB, BB_LEN)
-        h = self.conv(x)          # (B, D_BB, BB_LEN=30)
-        return h.transpose(1, 2)  # (B, T=30, D_BB)
+        h = self.conv(x)           # (B, D_BB, BB_LEN=30)
+        return h.transpose(1, 2)   # (B, T=30, D_BB)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# DÉCODEUR (identique à v1)
+# DÉCODEUR
 # ──────────────────────────────────────────────────────────────────────────────
 
 class TemporalDecoder(nn.Module):
@@ -438,11 +476,11 @@ class TemporalDecoder(nn.Module):
 class RHCSequencePredictorV2(nn.Module):
     """
     Architecture hybride 3 branches :
-      Branche 1 : SignalEncoder × 7 + CrossSignalTransformer → (B, T, D_MODEL)
-      Branche 2 : ScalarEncoder                               → (B, T, D_SCALAR)
-      Branche 3 : BeatByBeatEncoder                           → (B, T, D_BB)
-      Fusion    : concat + LayerNorm + projection             → (B, T, D_MODEL)
-      Décodeur  : TemporalDecoder                             → (B, T)
+      Branche 1 : SignalEncoder × N_SIGNALS + CrossSignalTransformer → (B, T, D_MODEL)
+      Branche 2 : ScalarEncoder                                       → (B, T, D_SCALAR)
+      Branche 3 : BeatByBeatEncoder                                   → (B, T, D_BB)
+      Fusion    : concat + LayerNorm + projection                     → (B, T, D_MODEL)
+      Décodeur  : TemporalDecoder                                     → (B, T)
     """
 
     def __init__(self, n_signals=N_SIGNALS, n_scalar=N_SCALAR, n_bb=N_BB,
@@ -481,11 +519,11 @@ class RHCSequencePredictorV2(nn.Module):
                 x_bb: torch.Tensor) -> torch.Tensor:
 
         # Branche 1 : (B, N_SIGNALS, 15000) → (B, T, D_MODEL)
-        feats   = torch.stack(
+        feats  = torch.stack(
             [enc(x_sig[:, i:i+1, :]) for i, enc in enumerate(self.encoders)],
             dim=1,
         )                                        # (B, N, D, T)
-        h_sig   = self.transformer(feats)        # (B, T, D_MODEL)
+        h_sig  = self.transformer(feats)         # (B, T, D_MODEL)
 
         # Branche 2 : (B, N_SCALAR) → (B, T, D_SCALAR)
         h_scalar = self.scalar_enc(x_scalar, t=h_sig.shape[1])
@@ -514,7 +552,9 @@ class RHCLightningModuleV2(L.LightningModule):
                  d_model=D_MODEL, d_scalar=D_SCALAR, d_bb=D_BB,
                  cnn_dropout=CNN_DROPOUT, trans_dropout=TRANS_DROPOUT,
                  lr=LR, weight_decay=WEIGHT_DECAY,
-                 rhc_mean: float = 0.0, rhc_std: float = 1.0):
+                 rhc_mean: float = 0.0, rhc_std: float = 1.0,
+                 scalar_mean=None, scalar_std=None,
+                 bb_mean=None, bb_std=None):
         super().__init__()
         self.save_hyperparameters()
         self.model = RHCSequencePredictorV2(
@@ -588,9 +628,11 @@ class RHCDataModuleV2(L.LightningDataModule):
         self.rhc_std     = 1.0
         self.scalar_mean = np.zeros(N_SCALAR, dtype=np.float32)
         self.scalar_std  = np.ones(N_SCALAR,  dtype=np.float32)
+        self.bb_mean     = np.zeros(N_BB,     dtype=np.float32)
+        self.bb_std      = np.ones(N_BB,      dtype=np.float32)
 
     def setup(self, stage: Optional[str] = None):
-        rng = torch.Generator().manual_seed(self.seed)
+        rng  = torch.Generator().manual_seed(self.seed)
         full = RHCDataset(self.folder)
         n    = len(full)
         n_test  = max(1, int(n * self.test_split))
@@ -601,10 +643,9 @@ class RHCDataModuleV2(L.LightningDataModule):
             range(n), [n_train, n_val, n_test], generator=rng
         )
 
-        # Calcul stats sur train uniquement
         train_files = [full.files[i] for i in train_idx]
 
-        # Stats RHC
+        # --- Stats RHC (sur train uniquement) ---
         all_rhc = []
         for f in train_files:
             mat = sio.loadmat(f)
@@ -616,7 +657,7 @@ class RHCDataModuleV2(L.LightningDataModule):
         self.rhc_mean = float(np.mean(all_rhc))
         self.rhc_std  = float(np.std(all_rhc)) + 1e-8
 
-        # Stats scalaires
+        # --- Stats scalaires (sur train uniquement) ---
         all_scalars = []
         for f in train_files:
             mat = sio.loadmat(f)
@@ -630,14 +671,28 @@ class RHCDataModuleV2(L.LightningDataModule):
         self.scalar_mean = np.nanmean(arr, axis=0)
         self.scalar_std  = np.nanstd(arr,  axis=0) + 1e-8
 
+        # --- Stats beat-by-beat (sur train uniquement) ---
+        all_bb = []
+        for f in train_files:
+            mat = sio.loadmat(f)
+            row = [load_bb(mat, k, target_len=BB_LEN) for k in BB_KEYS]
+            all_bb.append(np.stack(row, axis=0))          # (N_BB, BB_LEN)
+
+        arr_bb         = np.stack(all_bb, axis=0)         # (N_train, N_BB, BB_LEN)
+        arr_bb         = arr_bb.transpose(0, 2, 1).reshape(-1, N_BB)  # (N_train*BB_LEN, N_BB)
+        self.bb_mean   = np.nanmean(arr_bb, axis=0)       # (N_BB,)
+        self.bb_std    = np.nanstd(arr_bb,  axis=0) + 1e-8
+
         print(f"[DataModule] train={n_train}  val={n_val}  test={n_test}")
-        print(f"[DataModule] RHC mean={self.rhc_mean:.2f} mmHg  std={self.rhc_std:.2f} mmHg")
+        print(f"[DataModule] RHC  mean={self.rhc_mean:.2f} mmHg  std={self.rhc_std:.2f} mmHg")
+        print(f"[DataModule] BB   mean={self.bb_mean.round(1)}  std={self.bb_std.round(1)}")
 
         def _make(augment):
             return RHCDataset(
                 self.folder, augment=augment,
-                rhc_mean=self.rhc_mean, rhc_std=self.rhc_std,
+                rhc_mean=self.rhc_mean,     rhc_std=self.rhc_std,
                 scalar_mean=self.scalar_mean, scalar_std=self.scalar_std,
+                bb_mean=self.bb_mean,       bb_std=self.bb_std,
             )
 
         self.train_ds = Subset(_make(augment=True),  list(train_idx))
@@ -672,7 +727,12 @@ def train(segments_folder="processed/features_rhc", output_dir="checkpoints_v2",
     dm.setup()
 
     model = RHCLightningModuleV2(
-        rhc_mean=dm.rhc_mean, rhc_std=dm.rhc_std,
+        rhc_mean=dm.rhc_mean,
+        rhc_std=dm.rhc_std,
+        scalar_mean=dm.scalar_mean.tolist(),
+        scalar_std=dm.scalar_std.tolist(),
+        bb_mean=dm.bb_mean.tolist(),
+        bb_std=dm.bb_std.tolist(),
     )
 
     callbacks = [
@@ -708,7 +768,7 @@ def train(segments_folder="processed/features_rhc", output_dir="checkpoints_v2",
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--segments_folder", default="processed/features_rhc")
-    parser.add_argument("--output_dir",      default="Test_prediction_V2")
+    parser.add_argument("--output_dir",      default="checkpoints_v2")
     parser.add_argument("--fast_dev_run",    action="store_true")
     args = parser.parse_args()
 
