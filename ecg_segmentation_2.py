@@ -185,13 +185,6 @@ def detect_PR_interval(signal, peak_p, peak_q, fs, thresh_fraction = 0.01, max_d
             break
         onset_q -= 1
 
-    ### Vérification que l'intervalle PR est physiologiquement plausible (80-400 ms) sinon on prend les pics bruts comme onsets ###
-    pr_ms = (onset_q - onset_p) / fs * 1000
-
-    if pr_ms < 80 or pr_ms > 400:
-        onset_p = peak_p
-        onset_q = peak_q
-
     return onset_p, onset_q
 
 
@@ -365,7 +358,7 @@ if __name__ == "__main__":
         RR_mean = np.mean(RR_all)
         RR_median  = np.median(RR_all)
 
-        ### Détection des pics (P, Q, S, T) et des instervalles PR et QT ###
+        ### Détection des pics (P, Q, S, T) et des intervalles PR et QT ###
         p_peaks = []
         q_peaks = []
         s_peaks= []
@@ -385,7 +378,7 @@ if __name__ == "__main__":
 
             ### Fenêtres adaptatives ###
             p_window = min(200, int(rr_local_ms * 0.35))  ### max 35% du RR ###
-            t_window = min(500, int(rr_local_ms * 0.50))  #### max 50% du RR ###
+            t_window = min(500, int(rr_local_ms * 0.50))  ### max 50% du RR ###
 
             p = detect_peaks_ecg(ecg_nospike, r, fs, window_ms=p_window, offset_ms=80,  name_peak="P")
             q = detect_peaks_ecg(ecg_nospike, r, fs, window_ms=80, offset_ms=10,  name_peak="Q")
@@ -441,9 +434,9 @@ if __name__ == "__main__":
 
             print(f"\nPR intervals : {len(PR_intervals_list)} détectés, "
                   f"{mask_pr.sum()} après filtre IQR")
-            #print(f"  PR moyen   : {np.mean(PR_clean)*1000:.1f} ms")
+            print(f"PR moyen   : {np.mean(PR_clean)*1000:.1f} ms")
             print(f"PR médiane : {np.median(PR_clean)*1000:.1f} ms")
-            #print(f"  PR std     : {np.std(PR_clean)*1000:.1f} ms")
+            print(f"PR std     : {np.std(PR_clean)*1000:.1f} ms")
 
             PR_median_ms = np.median(PR_clean)*1000
 
@@ -460,7 +453,6 @@ if __name__ == "__main__":
         if len(QT_intervals_list) == 0:
             print("Aucun intervalle QT détecté")
         else:
-            # Valider que tous les indices sont dans les limites
             QT_array = np.array(QT_intervals_list)
             max_idx = len(t_segment)
             
@@ -510,7 +502,7 @@ if __name__ == "__main__":
 
 
         ### Visualisation ###
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 7), sharex=True)
+        fig, ax1 = plt.subplots(1, 1, figsize=(16, 7), sharex=True)
         fig.suptitle(f"ECG + SCG — {fname}  |  patient={patient}  |  FC={FC_mean:.0f} bpm",
                      fontsize=12)
 
@@ -562,17 +554,6 @@ if __name__ == "__main__":
         ax1.set_ylabel("Amplitude")
         ax1.grid(alpha=0.3)
         ax1.legend(loc="upper right", fontsize=8)
-
-        ### Axe 2 : SCG + lignes des pics R ###
-        ax2.plot(t_segment, scg_segment, color="steelblue", linewidth=0.9, label="SCG")
-
-        for r in r_peaks:
-            ax2.axvline(x=t_segment[r], color="red", alpha=0.3, linewidth=0.8)
-
-        ax2.set_ylabel("SCG (g)")
-        ax2.set_xlabel("Temps (s)")
-        ax2.legend(loc="upper right", fontsize=8)
-        ax2.grid(alpha=0.3)
 
         plt.tight_layout()
         plt.show()
