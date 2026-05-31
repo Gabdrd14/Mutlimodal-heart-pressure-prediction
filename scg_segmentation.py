@@ -184,7 +184,7 @@ def detect_scg_events(scg, r_peaks, fs, min_amp_ratio=0.05):
         AO_onset_list.append(ao_onset_idx)
 
         ### AC : pic négatif 250–420 ms après R + onset ###
-        ac_idx       = None
+        ac_idx = None
         ac_onset_idx = None
         ac_start = r + int(0.250 * fs)
         ac_end = r + int(0.420 * fs)
@@ -194,7 +194,7 @@ def detect_scg_events(scg, r_peaks, fs, min_amp_ratio=0.05):
             peak_idx = np.argmin(seg)
             amp = np.abs(seg[peak_idx] - baseline)
             if amp > min_amp_ratio * r_amp:
-                ac_idx       = ac_start + peak_idx
+                ac_idx = ac_start + peak_idx
                 ac_onset_idx = detect_AC_onset(scg, ac_idx, fs)
         AC_list.append(ac_idx)
         AC_onset_list.append(ac_onset_idx)
@@ -210,7 +210,7 @@ def detect_scg_events(scg, r_peaks, fs, min_amp_ratio=0.05):
             peak_idx = np.argmax(seg)
             amp = np.abs(seg[peak_idx] - baseline)
             if amp > min_amp_ratio * r_amp:
-                mo_idx       = mo_start + peak_idx
+                mo_idx = mo_start + peak_idx
                 mo_onset_idx = detect_MO_onset(scg, mo_idx, fs)
         MO_list.append(mo_idx)
         MO_onset_list.append(mo_onset_idx)
