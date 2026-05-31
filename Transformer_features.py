@@ -1,5 +1,5 @@
 """
-Structure du .mat de sortie (par patient)
+Features ECG et SCG pour le transformer
 -----------------------------------------
 
 Métadonnées
