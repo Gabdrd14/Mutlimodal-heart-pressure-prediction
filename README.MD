@@ -1,4 +1,4 @@
-# Multimodal ECG/SCG Preprocessing Pipeline for predicting RHC pressure value on 30s intervals
+# Multimodal ECG/SCG Preprocessing Pipeline for predicting RHC at 30s intervals
  
 Modular preprocessing pipeline for multimodal biomedical signals  
 (ECG + SCG from wearable sensors and WFDB datasets).
