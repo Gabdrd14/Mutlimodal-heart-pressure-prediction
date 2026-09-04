@@ -3,7 +3,7 @@
 Modular preprocessing pipeline for multimodal biomedical signals  
 (ECG + SCG from wearable sensors and WFDB datasets).
 
-This repository contains code for preprocessing and analyzing ECG and SCG signals for heart pressure prediction.  
+This repository contains code for preprocessing and analyzing ECG and SCG signals for heart pressure prediction RHC.  
 
 ---
 
